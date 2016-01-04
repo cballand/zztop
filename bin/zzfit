@@ -1,0 +1,102 @@
+#!/usr/bin/env python
+
+from desispec.log import get_logger
+from desispec.io.brick import Brick
+
+import argparse
+import numpy as np
+import sys
+import math
+from astropy.io import fits
+from zztop.line_scan import zz_line_scan
+import zztop.io as io
+
+
+def main() :
+
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument('--b', type = str, default = None, required=True,
+                        help = 'path of DESI brick in b')
+    parser.add_argument('--r', type = str, default = None, required=True,
+                        help = 'path of DESI brick in r')
+    parser.add_argument('--z', type = str, default = None, required=True,
+                        help = 'path of DESI brick in z')
+    parser.add_argument('--outfile', type = str, default = None, required=True,
+                        help = 'path of output file')
+    parser.add_argument('--nspec', type = int, default = None, required=False,
+                        help = 'max number of spectra to fit')
+    
+    
+    args = parser.parse_args()
+    log=get_logger()
+
+    log.info("starting")
+
+    
+
+    b_brick=Brick(args.b)
+    r_brick=Brick(args.r)
+    z_brick=Brick(args.z)
+    
+    elg_spectra=np.where(b_brick.hdu_list[7].data["OBJTYPE"]=="ELG")[0]
+    
+    # all
+    lines=np.array([3727.092,3729.875,4862.708,4960.295,5008.240,6564.603])
+    vdisps=50.*np.ones(lines.size) # same velocity dispersion (can do different)
+
+    # key is the line index it refers to.
+    # first is the min value of what ?
+    # second is the max value of what ?
+    line_ratio_priors={}
+    line_ratio_priors[1]=[0,0.5,1.5] # prior on OII doublet line ratio
+
+    results=None
+
+    truth_table_hdu=None
+    try :
+        b_hdulist = fits.open(args.b)
+        truth_table_hdu=b_hdulist["_TRUTH"]
+        log.info("brick has truth table")
+    except KeyError :
+        truth_table_hdu=None
+        
+    if args.nspec is not None :
+        nspec = min(args.nspec,elg_spectra.size)
+    else :
+        nspec=elg_spectra.size
+    
+    log.info("will fit %d spectra"%nspec)
+
+
+    for spec,s in zip(elg_spectra[:nspec],range(nspec)) :
+        flux=[b_brick.hdu_list[0].data[spec],r_brick.hdu_list[0].data[spec],z_brick.hdu_list[0].data[spec]]
+        ivar=[b_brick.hdu_list[1].data[spec],r_brick.hdu_list[1].data[spec],z_brick.hdu_list[1].data[spec]]
+        wave=[b_brick.hdu_list[2].data,r_brick.hdu_list[2].data,z_brick.hdu_list[2].data]    
+        resolution=[b_brick.hdu_list[3].data[spec],r_brick.hdu_list[3].data[spec],z_brick.hdu_list[3].data[spec]]
+        result = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=line_ratio_priors,zstep=0.001,zmin=0.3,zmax=2.,wave_nsig=2.,ntrack=3,recursive=True)
+    
+
+        if results is None :
+
+            dtype = list()
+            for key in result.keys() :
+                dtype.append( (key, np.float32) ) # need to change this
+            results = np.empty(nspec, dtype=dtype)
+        for key in result.keys() :
+            results[key][s]=result[key]
+
+    brickname = args.b
+    targetids = b_brick.get_target_ids()[:nspec]
+
+        
+
+    io.write_zbest(args.outfile,brickname,targetids,results,truth_table_hdu)
+    log.info("wrote %s"%args.outfile)
+    log.info("the end")
+    
+
+if __name__ == '__main__':
+    main()
+    
+
