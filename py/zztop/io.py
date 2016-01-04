@@ -37,12 +37,6 @@ def write_zbest(filename, brickname, targetids, zztop_results, truth_table_hdu=N
     
     data['BRICKNAME'] = brickname
     data['TARGETID']  = targetids
-
-    # change things here
-    print zztop_results.dtype.names
-    print zztop_results.size
-    
-    
     
     data['Z']         = zztop_results["BEST_Z"]
     data['ZERR']      = zztop_results["BEST_Z_ERR"]
