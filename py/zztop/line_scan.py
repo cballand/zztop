@@ -2,8 +2,11 @@ from desispec.log import get_logger
 from desispec.linalg import cholesky_solve
 
 import numpy as np
+import scipy.sparse
 import math
 import sys
+import pylab
+
 
 def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,recursive=True) :
 
@@ -221,6 +224,11 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
         chi2 = chi2_0
         
         redshifted_lines=lines*(1+z)
+
+        
+        
+        
+
         redshifted_sigmas=restframe_sigmas*(1+z) # this is the sigmas of all lines
         
         delta_chi2_coeff_per_group={} # either a scalar or a vector per group (it's getting complicated)
@@ -244,6 +252,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
             for frame_index in range(nframes) :
                 frame_wave = wave[frame_index]
                 frame_ivar = ivar[frame_index]
+                nw=frame_wave.size
                 w1=np.min(frame_wave[frame_ivar>0])
                 w2=np.max(frame_wave[frame_ivar>0])
                 if w2<l1 :
@@ -257,12 +266,18 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
                 frame_wave=frame_wave[wave_index]
                 frame_ivar=frame_ivar[wave_index]
                 frame_flux=flux[frame_index][wave_index]
+                # this is the block of the diagonal sparse matrix corresponding to the wavelength of interest :
+                frame_res_for_group=scipy.sparse.dia_matrix((resolution[frame_index].data[:,wave_index], resolution[frame_index].offsets), shape=(wave_index.size, wave_index.size))
                 
                 # compute profiles :
                 tmp_prof=np.zeros((nlines,wave_index.size))
                  
                 for i,line_index,line,sig in zip(range(group.size),group,redshifted_lines[group],redshifted_sigmas[group]) :
                     prof=np.interp((frame_wave-line)/sig,x,gx)
+
+                    # add here the spectrograph resolution
+                    prof=frame_res_for_group.dot(prof)         
+                    
                     # save stuff
                     sum_ivar_flux_prof[frame_index,line_index]=np.sum(frame_ivar*prof*frame_flux)
                     sum_ivar_prof2[frame_index,line_index]=np.sum(frame_ivar*prof**2)
