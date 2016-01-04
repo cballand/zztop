@@ -72,12 +72,12 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     chi2(z) = chi2_0 + sum_g dchi2(g,z)
     
     """
-    chris_debug=False
+    
    
     log=get_logger()
     
     nframes=len(wave)
-    if (chris_debug): print "Nframes = %d"%nframes
+    
 
     ndf=0
     for index in range(nframes) :
@@ -94,7 +94,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     log.debug("vdisps=%s"%str(vdisps))
     log.debug("zstep=%f"%zstep)
     log.debug("nframes=%d"%nframes)
-
+    log.debug("nlines=%d"%(lines.size))
     # consider Gaussian line profile
     # sig=(line*v/c)*(1+z)
     cspeed=2.9970e5 # km/s
@@ -105,42 +105,44 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     line_group=-1*np.ones((lines.size)).astype(int)
     line_group[0]=0 # add first one
 
+    grouping_debug=False
+    
     # grouping lines that overlap
     # add simple resolution estimate for grouping
     resolution_sigma=1. 
     for line_index in range(lines.size) :
-        if (chris_debug): print 'line_index = %d'%line_index
+        if grouping_debug : log.debug("line_index = %d"%line_index)
         line=lines[line_index]
-        if (chris_debug): print 'line: %s, line_group: %s'%(line,line_group)
+        if grouping_debug : log.debug('line: %s, line_group: %s'%(line,line_group))
         for group_index in np.where(line_group>=0)[0] :
-            if (chris_debug): print 'group_index: %d, np.where(line_group>=0)[0]: %s'%(group_index,np.where(line_group>=0)[0])
+            if grouping_debug : log.debug('group_index: %d, np.where(line_group>=0)[0]: %s'%(group_index,np.where(line_group>=0)[0]))
             for other_line in lines[np.where(line_group==group_index)[0]] :
-                if (chris_debug): print 'other_line: %s, np.where(line_group==group_index)[0]: %s, lines[np.where(line_group==group_index)[0]]: %s'%(other_line,np.where(line_group==group_index)[0],lines[np.where(line_group==group_index)[0]])
-                if (chris_debug): print 'line-other_line = %s'%(line-other_line)
-                if (line-other_line)**2 < 5*(restframe_sigmas[line_index]**2+resolution_sigma**2) :
+                if grouping_debug : log.debug('other_line: %s, np.where(line_group==group_index)[0]: %s, lines[np.where(line_group==group_index)[0]]: %s'%(other_line,np.where(line_group==group_index)[0],lines[np.where(line_group==group_index)[0]]))
+                if grouping_debug : log.debug('line-other_line = %s'%(line-other_line))
+                if grouping_debug : log.debug('%f <? %f'%((line-other_line)**2,5**2*(restframe_sigmas[line_index]**2+resolution_sigma**2)))
+                if (line-other_line)**2 < 5**2*(restframe_sigmas[line_index]**2+resolution_sigma**2) :
                     line_group[line_index]=group_index
-                    if (chris_debug): print 'line_group: %s'%(line_group)
-                    if (chris_debug): print 'End of cond. 1'
+                    if grouping_debug : log.debug('line_group: %s'%(line_group))
+                    if grouping_debug : log.debug('End of cond. 1')
                     break
             if line_group[line_index]>=0 :
-                if (chris_debug): print 'line_group: %s'%line_group
-                if (chris_debug): print 'End of cond. 2'
+                if grouping_debug : log.debug('line_group: %s'%line_group)
+                if grouping_debug : log.debug('End of cond. 2')
                 break
         if line_group[line_index]==-1 :
-            if (chris_debug): print 'line_group[line_index]=-1, lin_index = %d'%line_index
+            if grouping_debug : log.debug('line_group[line_index]=-1, lin_index = %d'%line_index)
             line_group[line_index]=np.max(line_group)+1
-            if (chris_debug): print 'New line_group[line_index]: %s'%line_group[line_index]
+            if grouping_debug : log.debug('New line_group[line_index]: %s'%line_group[line_index])
     for line,group_index in zip(lines,line_group) :
-        log.debug("line=%f group=%d"%(line,group_index))
+        if grouping_debug : log.debug("line=%f group=%d"%(line,group_index))
+    
     groups={}
     for g in np.unique(line_group) :
         groups[g]=np.where(line_group==g)[0]
+    
     for g in groups :
         log.debug("group=%d lines=%s"%(g,groups[g]))
-    
-
-    if (chris_debug): print "groups = %s"%groups
- 
+     
     nframes=len(wave)
     zrange=np.zeros((nframes,2))
     
@@ -305,7 +307,9 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
             else :
                 delta_chi2_coeff_per_group[group_index] = -b
                 #chi2 -= np.inner(b,line_amplitudes[group]) # don't do it now because prior can modify line_amplitudes
+                
         
+
         # apply priors 
         if line_ratio_priors is not None :
             for line_index in line_ratio_priors :
