@@ -1,8 +1,11 @@
 from desispec.log import get_logger
+from desispec.linalg import cholesky_solve
+
 import numpy as np
 import math
+import sys
 
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=2.,ntrack=3,recursive=True) :
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,recursive=True) :
 
     """
     args :
@@ -264,7 +267,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
                     sum_ivar_flux_prof[frame_index,line_index]=np.sum(frame_ivar*prof*frame_flux)
                     sum_ivar_prof2[frame_index,line_index]=np.sum(frame_ivar*prof**2)
                     tmp_prof[i]=prof
-
+                                
                 # fill amplitude system (a and b) :
                 if nlines==1 :
                     a0+=sum_ivar_prof2[frame_index,group[0]]
@@ -289,13 +292,19 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
                     a[i,i] += (a[i,i]==0)
                     
                 try :
-                    amps=desispec.linalg.cholesky_solve(a,b)
+                    amps=cholesky_solve(a,b)
                     for i,line_index in zip(range(nlines),group) :
                         line_amplitudes[line_index]=max(0.,amps[i])
                 except  :
+                    log.warning("cholesky_solve failed")
                     for i,line_index in zip(range(nlines),group) :
                         line_amplitudes[line_index]=0.
-
+            
+           
+                
+                
+                
+                
             # add chi2 for this group
             if nlines==1 :
                 if a0>0 :
