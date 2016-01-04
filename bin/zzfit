@@ -74,7 +74,7 @@ def main() :
         ivar=[b_brick.hdu_list[1].data[spec],r_brick.hdu_list[1].data[spec],z_brick.hdu_list[1].data[spec]]
         wave=[b_brick.hdu_list[2].data,r_brick.hdu_list[2].data,z_brick.hdu_list[2].data]    
         resolution=[b_brick.hdu_list[3].data[spec],r_brick.hdu_list[3].data[spec],z_brick.hdu_list[3].data[spec]]
-        result = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=line_ratio_priors,zstep=0.001,zmin=0.3,zmax=2.,wave_nsig=2.,ntrack=3,recursive=True)
+        result = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=line_ratio_priors,zstep=0.001,zmin=0.3,zmax=2.,wave_nsig=3.,ntrack=3,recursive=True)
     
 
         if results is None :
