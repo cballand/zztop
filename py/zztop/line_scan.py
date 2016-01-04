@@ -7,6 +7,154 @@ import math
 import sys
 import pylab
 
+def find_groups(lines,restframe_sigmas,resolution_sigma=1.,nsig=5.) :
+    """
+    internal routine : find group of lines that we have to fit together because they overlap
+    """
+    line_group=-1*np.ones((lines.size)).astype(int)
+    line_group[0]=0 # add first one
+    
+    for line_index in range(lines.size) :
+        line=lines[line_index]
+        for group_index in np.where(line_group>=0)[0] :
+            for other_line in lines[np.where(line_group==group_index)[0]] :
+                if (line-other_line)**2 < nsig**2*(restframe_sigmas[line_index]**2+resolution_sigma**2) :
+                    line_group[line_index]=group_index
+                    break
+            if line_group[line_index]>=0 :
+                break
+        if line_group[line_index]==-1 :
+            line_group[line_index]=np.max(line_group)+1
+        
+    
+    groups={}
+    for g in np.unique(line_group) :
+        groups[g]=np.where(line_group==g)[0]
+    
+    
+    return groups
+
+def zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_priors,z,wave_nsig,x,gx,groups) :
+    """
+    internal routine : fit line amplitudes and return delta chi2 with respect to zero amplitude
+    """
+    redshifted_lines=lines*(1+z)
+    redshifted_sigmas=restframe_sigmas*(1+z) # this is the sigmas of all lines
+    
+    delta_chi2_coeff_per_group={} # either a scalar or a vector per group (it's getting complicated)
+
+    nframes=len(flux)
+    
+    # compute profiles, and fill A and B matrices
+    # A and B are matrix and vector so that line amplitudes are solution of A*amp = B
+    
+    A=np.zeros((lines.size,lines.size))
+    B=np.zeros((lines.size))
+    
+    # do it per group to account for overlapping lines
+    for group_index in groups :
+        lines_in_group=groups[group_index]
+        l1=np.min(redshifted_lines[lines_in_group]-wave_nsig*redshifted_sigmas[lines_in_group])
+        l2=np.max(redshifted_lines[lines_in_group]+wave_nsig*redshifted_sigmas[lines_in_group])            
+        nlines=lines_in_group.size
+                    
+        for frame_index in range(nframes) :
+            frame_wave = wave[frame_index]
+            frame_ivar = ivar[frame_index]
+            nw=frame_wave.size
+            # wavelength that matter :
+            wave_index=np.where((frame_wave>=l1)&(frame_wave<=l2)&(frame_ivar>0))[0]
+            if wave_index.size == 0 :
+                continue
+            frame_wave=frame_wave[wave_index]
+            frame_ivar=frame_ivar[wave_index]
+            frame_flux=flux[frame_index][wave_index]
+                
+            # this is the block of the diagonal sparse matrix corresponding to the wavelength of interest :
+            frame_res_for_group=scipy.sparse.dia_matrix((resolution[frame_index].data[:,wave_index], resolution[frame_index].offsets), shape=(wave_index.size, wave_index.size))
+                
+            # compute profiles    
+            profile_of_lines=np.zeros((lines_in_group.size,frame_wave.size))
+            for i,line_index,line,sig in zip(range(lines_in_group.size),lines_in_group,redshifted_lines[lines_in_group],redshifted_sigmas[lines_in_group]) :
+
+                # simple Gaussian given velocity dispersion
+                prof=np.interp((frame_wave-line)/sig,x,gx)
+                
+                # convolve here with the spectrograph resolution
+                profile_of_lines[i]=frame_res_for_group.dot(prof)
+            
+            # fill amplitude system (A and B) :
+            for i in range(nlines) :
+                B[lines_in_group[i]]   += np.sum(frame_ivar*profile_of_lines[i]*frame_flux)
+                for j in range(nlines) :
+                    A[lines_in_group[i],lines_in_group[j]] += np.sum(frame_ivar*profile_of_lines[i]*profile_of_lines[j])
+        
+    
+    # solving outside of group to simplify the code even if it is supposedly slower (the matrix is nearly diagonal)
+    line_amplitudes_ivar = np.diag(A)
+    
+    
+    # give value to undefined lines (it's not a problem)
+    for i in range(lines.size) :
+        if A[i,i]==0 :
+            A[i,i]=1
+
+    # solve the system
+    try :
+        line_amplitudes = cholesky_solve(A,B)
+    except  :
+        log.warning("cholesky_solve failed")
+        return 1e5,np.zeros((lines.size)),np.zeros((lines.size))
+    
+    # apply priors (outside of loop on groups)
+    if line_ratio_priors is not None :
+        for line_index in line_ratio_priors :
+            other_line_index = int(line_ratio_priors[line_index][0])
+            min_ratio        = float(line_ratio_priors[line_index][1])
+            max_ratio        = float(line_ratio_priors[line_index][2])
+            # ratio = this_line/other_line
+            norme = np.sum(line_amplitudes_ivar[[line_index,other_line_index]])
+            if norme==0 :
+                continue   
+            total_amplitude   = np.sum((line_amplitudes_ivar*line_amplitudes)[[line_index,other_line_index]])/norme
+
+            if total_amplitude==0 :
+                continue
+            if line_amplitudes[other_line_index]==0 :
+                # use max allowed value
+                line_amplitudes[other_line_index] = total_amplitude/(1.+max_ratio)
+                line_amplitudes[line_index]       = total_amplitude*max_ratio/(1.+max_ratio)
+            else :
+                ratio = line_amplitudes[line_index]/line_amplitudes[other_line_index]
+                if ratio<min_ratio :
+                    line_amplitudes[other_line_index] = total_amplitude/(1.+min_ratio)
+                    line_amplitudes[line_index]       = total_amplitude*min_ratio/(1.+min_ratio)
+                elif ratio>max_ratio :
+                    line_amplitudes[other_line_index] = total_amplitude/(1.+max_ratio)
+                    line_amplitudes[line_index]       = total_amplitude*max_ratio/(1.+max_ratio)
+
+    # force non-negative here?
+    line_amplitudes[line_amplitudes<0]=0.
+    
+    # add chi2 for this group
+    """
+    chi2 = sum w*(data - amp*prof)**2
+    = sum w*data**2 + amp**2 sum w prof**2 - 2 * amp * sum w*data*prof
+    = chi20 + amp^T A amp - 2 B^T amp
+    
+    min chi2 for amp = A^-1 B
+    min chi2 = chi20 - B^T A^-1 B
+    
+    BUT, we may have changed the amplitudes with the prior !
+    """
+    
+    # apply delta chi2 per group
+    dchi2 = A.dot(line_amplitudes).T.dot(line_amplitudes) - 2*np.inner(B,line_amplitudes)
+    
+    # return
+    return dchi2,line_amplitudes,line_amplitudes_ivar
+
+    
 
 def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,recursive=True) :
 
@@ -85,13 +233,12 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     nframes=len(wave)
     
 
-    ndf=0
+    ndata=0
     for index in range(nframes) :
-        ndf += np.sum(ivar[index]>0)
+        ndata += np.sum(ivar[index]>0)
     
-    ndf-=2 # FOR THE MOMENT WE FIT ONLY ONE AMPLITUDE PER Z
-    if ndf<=0 :
-        log.warning("ndf=%d skip this spectrum")
+    if ndata<2 :
+        log.warning("ndata=%d skip this spectrum")
         return None,None
 
     log.debug("lines=%s"%str(lines))
@@ -101,60 +248,22 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     log.debug("zstep=%f"%zstep)
     log.debug("nframes=%d"%nframes)
     log.debug("nlines=%d"%(lines.size))
+    
     # consider Gaussian line profile
     # sig=(line*v/c)*(1+z)
     cspeed=2.9970e5 # km/s
-    restframe_sigmas=lines*vdisps/cspeed # sigma in rest-frame
+    restframe_sigmas=lines*vdisps/cspeed # sigma in rest-frame in A
     
-
     # find group of lines that we have to fit together because they overlap
-    line_group=-1*np.ones((lines.size)).astype(int)
-    line_group[0]=0 # add first one
+    groups = find_groups(lines,restframe_sigmas)
 
-    grouping_debug=False
-    
-    # grouping lines that overlap
-    # add simple resolution estimate for grouping
-    resolution_sigma=1. 
-    for line_index in range(lines.size) :
-        if grouping_debug : log.debug("line_index = %d"%line_index)
-        line=lines[line_index]
-        if grouping_debug : log.debug('line: %s, line_group: %s'%(line,line_group))
-        for group_index in np.where(line_group>=0)[0] :
-            if grouping_debug : log.debug('group_index: %d, np.where(line_group>=0)[0]: %s'%(group_index,np.where(line_group>=0)[0]))
-            for other_line in lines[np.where(line_group==group_index)[0]] :
-                if grouping_debug : log.debug('other_line: %s, np.where(line_group==group_index)[0]: %s, lines[np.where(line_group==group_index)[0]]: %s'%(other_line,np.where(line_group==group_index)[0],lines[np.where(line_group==group_index)[0]]))
-                if grouping_debug : log.debug('line-other_line = %s'%(line-other_line))
-                if grouping_debug : log.debug('%f <? %f'%((line-other_line)**2,5**2*(restframe_sigmas[line_index]**2+resolution_sigma**2)))
-                if (line-other_line)**2 < 5**2*(restframe_sigmas[line_index]**2+resolution_sigma**2) :
-                    line_group[line_index]=group_index
-                    if grouping_debug : log.debug('line_group: %s'%(line_group))
-                    if grouping_debug : log.debug('End of cond. 1')
-                    break
-            if line_group[line_index]>=0 :
-                if grouping_debug : log.debug('line_group: %s'%line_group)
-                if grouping_debug : log.debug('End of cond. 2')
-                break
-        if line_group[line_index]==-1 :
-            if grouping_debug : log.debug('line_group[line_index]=-1, lin_index = %d'%line_index)
-            line_group[line_index]=np.max(line_group)+1
-            if grouping_debug : log.debug('New line_group[line_index]: %s'%line_group[line_index])
-    for line,group_index in zip(lines,line_group) :
-        if grouping_debug : log.debug("line=%f group=%d"%(line,group_index))
-    
-    groups={}
-    for g in np.unique(line_group) :
-        groups[g]=np.where(line_group==g)[0]
-    
     for g in groups :
-        log.debug("group=%d lines=%s"%(g,groups[g]))
-     
+        log.debug("group=%d lines=%s"%(g,lines[groups[g]]))
+
     nframes=len(wave)
     zrange=np.zeros((nframes,2))
     
-    
-    log.debug("ndf=%d"%ndf)
-    
+        
     lmin=np.min(lines)
     lmax=np.max(lines)
 
@@ -190,21 +299,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     previous_chi2=0
     previous_is_at_rank=-1
     
-    model=[]
-    for frame_index in range(nframes) :
-#        model.append(np.zeros((wave[index].size)))
-        model.append(np.zeros((wave[frame_index].size))) # was it a bug ? (CB)
-        
-
-
-    # redshift scan (we just record here the best value)
-    
-    line_amplitudes=np.zeros((lines.size))              # used to compute chi2 after line amplitude fit
-    line_amplitudes_ivar=np.zeros((lines.size))              # used to compute chi2 after line amplitude fit
-    sum_ivar_flux_prof = np.zeros((nframes,lines.size)) # used to compute chi2 after line amplitude fit
-    sum_ivar_prof2     = np.zeros((nframes,lines.size)) # used to compute chi2 after line amplitude fit
-
-    best_z_line_amplitudes=np.zeros((lines.size))         # save this
+    best_z_line_amplitudes=np.zeros((lines.size))       # save this
     best_z_line_amplitudes_ivar=np.zeros((lines.size))  # save this
     
     # compute chi2 for zero lines
@@ -212,164 +307,14 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     for frame_index in range(nframes) :
         chi2_0 += np.sum(ivar[frame_index]*flux[frame_index]**2)
     
-
+    # redshift scan
     for z in np.linspace(zmin,zmax,num=int((zmax-zmin)/zstep+1)) :
+
+        # the whole fit happens here
+        dchi2,line_amplitudes,line_amplitudes_ivar = zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_priors,z,wave_nsig,x,gx,groups)
+        chi2 = chi2_0 + dchi2
         
-        # reset (wo memory allocation)
-        line_amplitudes *= 0.
-        for frame_index in range(nframes) :
-            model[frame_index] *= 0.
-        sum_ivar_flux_prof *= 0;
-        sum_ivar_prof2     *= 0;
-        chi2 = chi2_0
-        
-        redshifted_lines=lines*(1+z)
-
-        
-        
-        
-
-        redshifted_sigmas=restframe_sigmas*(1+z) # this is the sigmas of all lines
-        
-        delta_chi2_coeff_per_group={} # either a scalar or a vector per group (it's getting complicated)
-            
-        # compute profiles for each line in each group and fill model
-        for group_index in groups :
-            group=groups[group_index]
-            l1=np.min(redshifted_lines[group]-wave_nsig*redshifted_sigmas[group])
-            l2=np.max(redshifted_lines[group]+wave_nsig*redshifted_sigmas[group])
-            
-            nlines=group.size
-
-            # matrices of system to solve :   a*line_amplitudes = b
-            if nlines==1 :
-                a0=0.
-                b0=0.
-            else :
-                a=np.zeros((nlines,nlines))
-                b=np.zeros((nlines))
-            
-            for frame_index in range(nframes) :
-                frame_wave = wave[frame_index]
-                frame_ivar = ivar[frame_index]
-                nw=frame_wave.size
-                w1=np.min(frame_wave[frame_ivar>0])
-                w2=np.max(frame_wave[frame_ivar>0])
-                if w2<l1 :
-                    continue
-                if w1>l2 :
-                    continue
-                # wavelength that matter :
-                wave_index=np.where((frame_wave>=l1)&(frame_wave<=l2)&(frame_ivar>0))[0]
-                if wave_index.size == 0 :
-                    continue
-                frame_wave=frame_wave[wave_index]
-                frame_ivar=frame_ivar[wave_index]
-                frame_flux=flux[frame_index][wave_index]
-                # this is the block of the diagonal sparse matrix corresponding to the wavelength of interest :
-                frame_res_for_group=scipy.sparse.dia_matrix((resolution[frame_index].data[:,wave_index], resolution[frame_index].offsets), shape=(wave_index.size, wave_index.size))
-                
-                # compute profiles :
-                tmp_prof=np.zeros((nlines,wave_index.size))
-                 
-                for i,line_index,line,sig in zip(range(group.size),group,redshifted_lines[group],redshifted_sigmas[group]) :
-                    prof=np.interp((frame_wave-line)/sig,x,gx)
-
-                    # add here the spectrograph resolution
-                    prof=frame_res_for_group.dot(prof)         
-                    
-                    # save stuff
-                    sum_ivar_flux_prof[frame_index,line_index]=np.sum(frame_ivar*prof*frame_flux)
-                    sum_ivar_prof2[frame_index,line_index]=np.sum(frame_ivar*prof**2)
-                    tmp_prof[i]=prof
-                                
-                # fill amplitude system (a and b) :
-                if nlines==1 :
-                    a0+=sum_ivar_prof2[frame_index,group[0]]
-                    b0+=sum_ivar_flux_prof[frame_index,group[0]]
-                else :
-                    for i in range(nlines) :
-                        b[i]   += sum_ivar_flux_prof[frame_index,group[i]]
-                        for j in range(nlines) :
-                            a[i,j] += np.sum(frame_ivar*tmp_prof[i]*tmp_prof[j])
-                    
-            # now solve
-            if nlines==1 :
-                if a0>0 :
-                    line_amplitudes[group[0]] = max(0.,b0/a0)
-                    line_amplitudes_ivar[group[0]] = a0
-                else :
-                    line_amplitudes[group[0]] = 0
-                    line_amplitudes_ivar[group[0]] = 0 
-            else :
-                for i in range(nlines) :
-                    line_amplitudes_ivar[group[i]]=a[i,i]
-                    a[i,i] += (a[i,i]==0)
-                    
-                try :
-                    amps=cholesky_solve(a,b)
-                    for i,line_index in zip(range(nlines),group) :
-                        line_amplitudes[line_index]=max(0.,amps[i])
-                except  :
-                    log.warning("cholesky_solve failed")
-                    for i,line_index in zip(range(nlines),group) :
-                        line_amplitudes[line_index]=0.
-            
-           
-                
-                
-                
-                
-            # add chi2 for this group
-            if nlines==1 :
-                if a0>0 :
-                    delta_chi2_coeff_per_group[group_index] = -b0
-                    #chi2 -= b0**2/a0 # don't do it now because prior can modify line_amplitudes
-                else :
-                    delta_chi2_coeff_per_group[group_index] = 0.
-                    
-            else :
-                delta_chi2_coeff_per_group[group_index] = -b
-                #chi2 -= np.inner(b,line_amplitudes[group]) # don't do it now because prior can modify line_amplitudes
-                
-        
-
-        # apply priors 
-        if line_ratio_priors is not None :
-            for line_index in line_ratio_priors :
-                other_line_index = int(line_ratio_priors[line_index][0])
-                min_ratio        = float(line_ratio_priors[line_index][1])
-                max_ratio        = float(line_ratio_priors[line_index][2])
-                # ratio = this_line/other_line
-                norme = np.sum(line_amplitudes_ivar[[line_index,other_line_index]])
-                if norme==0 :
-                    continue   
-                total_amplitude   = np.sum((line_amplitudes_ivar*line_amplitudes)[[line_index,other_line_index]])/norme
-                
-                if total_amplitude==0 :
-                    continue
-                if line_amplitudes[other_line_index]==0 :
-                    # use max allowed value
-                    line_amplitudes[other_line_index] = total_amplitude/(1.+max_ratio)
-                    line_amplitudes[line_index]       = total_amplitude*max_ratio/(1.+max_ratio)
-                else :
-                    ratio = line_amplitudes[line_index]/line_amplitudes[other_line_index]
-                    if ratio<min_ratio :
-                        line_amplitudes[other_line_index] = total_amplitude/(1.+min_ratio)
-                        line_amplitudes[line_index]       = total_amplitude*min_ratio/(1.+min_ratio)
-                    elif ratio>max_ratio :
-                        line_amplitudes[other_line_index] = total_amplitude/(1.+max_ratio)
-                        line_amplitudes[line_index]       = total_amplitude*max_ratio/(1.+max_ratio)
-
-
-        # apply delta chi2 per group
-        for group_index in groups :
-            group=groups[group_index]
-            if group.size==1 :
-                chi2 += delta_chi2_coeff_per_group[group_index]*line_amplitudes[group[0]]
-            else :
-                chi2 += np.inner(delta_chi2_coeff_per_group[group_index],line_amplitudes[group])
-
+        # now we have to keep track of several solutions
         if chi2<np.max(best_chi2s) :
             
             # find position depending on value of chi2
@@ -387,7 +332,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
             best_zs[i]=z
             chi2s_at_best_z_minus_zstep[i]=previous_chi2
             best_z_line_amplitudes=line_amplitudes
-            best_z_line_amplitudes_ivar=np.sum(sum_ivar_prof2,axis=0)            
+            best_z_line_amplitudes_ivar=line_amplitudes_ivar
             previous_is_at_rank=i
         else :
             if previous_is_at_rank>=0 :
@@ -402,7 +347,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     
     
     if recursive :
-        log.debug("first pass best z =%f chi2/ndf=%f, second z=%f dchi2=%f, third z=%f dchi2=%f"%(best_zs[0],best_chi2s[0]/ndf,best_zs[1],best_chi2s[1]-best_chi2s[0],best_zs[2],best_chi2s[2]-best_chi2s[0]))
+        log.debug("first pass best z =%f chi2/ndata=%f, second z=%f dchi2=%f, third z=%f dchi2=%f"%(best_zs[0],best_chi2s[0]/ndata,best_zs[1],best_chi2s[1]-best_chi2s[0],best_zs[2],best_chi2s[2]-best_chi2s[0]))
         
     
     
@@ -482,7 +427,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     for index in range(nframes) :
         ndf += np.sum(ivar[index]>0)
     
-    ndf-=(np.sum(best_z_line_amplitudes>0)+1)
+    ndf-=(np.sum(best_z_line_amplitudes_ivar>0)+1)
     
     snr=math.sqrt(np.sum(best_z_line_amplitudes**2*best_z_line_amplitudes_ivar))
     
@@ -500,31 +445,5 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
         livar=best_z_line_amplitudes_ivar[line_index]
         res["BEST_AMP_ERR_%02d"%line_index]=(livar>0)/math.sqrt(livar+(livar==0))
     
-
-    """
-    # plotting
-    for line_index in range(lines.size) :
-        print "line %fA amp= %g +- %g\n"%(lines[line_index],res["BEST_AMP_%02d"%line_index],res["BEST_AMP_ERR_%02d"%line_index])
-    
-    best_z = best_zs[0]
-    redshifted_lines=lines*(1+best_z)
-    redshifted_sigmas=restframe_sigmas*(1+best_z) # this is the sigmas of all lines
-    colors=np.array(["b","g","r"])
-    for frame_index in range(nframes) :
-        color=colors[frame_index%3]
-        ok=np.where(ivar[frame_index]>1./(1.e-17)**2)[0]
-#        pylab.errorbar(wave[frame_index][ok],flux[frame_index][ok],1/np.math.sqrt(ivar[frame_index][ok]),fmt="o",color=color,alpha=0.3)
-        model=0.*flux[frame_index]
-        for line,sig,amp in zip(redshifted_lines,redshifted_sigmas,best_z_line_amplitudes) :
-            if amp>0 :
-                model += amp*np.interp((wave[frame_index]-line)/sig,x,gx)
-
-        for line in redshifted_lines:
-            ok=np.where((wave[frame_index]>line-10.) & (wave[frame_index]<line+10.))
-#            pylab.plot(wave[frame_index][ok]/(1.+best_z),model[ok],c="r")
-#            pylab.plot(wave[frame_index][ok]/(1.+best_z),flux[frame_index][ok])
-
-#    pylab.show()
-    """    
 
     return res

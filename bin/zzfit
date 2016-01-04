@@ -45,7 +45,7 @@ def main() :
     
     # all
     lines=np.array([3727.092,3729.875,4862.708,4960.295,5008.240,6564.603])
-    vdisps=90.*np.ones(lines.size) # same velocity dispersion (can do different)
+    vdisps=90.*np.ones(lines.size) # same velocity dispersion , in km/s (can do different)
 
     # key is the line index it refers to.
     # first is the min value of what ?
@@ -76,18 +76,24 @@ def main() :
         ivar=[b_brick.hdu_list[1].data[spec],r_brick.hdu_list[1].data[spec],z_brick.hdu_list[1].data[spec]]
         wave=[b_brick.hdu_list[2].data,r_brick.hdu_list[2].data,z_brick.hdu_list[2].data]    
         resolution=[Resolution(native_endian(b_brick.hdu_list[3].data[spec])),Resolution(native_endian(r_brick.hdu_list[3].data[spec])),Resolution(native_endian(z_brick.hdu_list[3].data[spec]))]
-        result = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=line_ratio_priors,zstep=0.001,zmin=0.3,zmax=2.,wave_nsig=3.,ntrack=3,recursive=True)
+        result = zz_line_scan(wave=wave,flux=flux,ivar=ivar,resolution=resolution,
+                              lines=lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,
+                              zstep=0.001,zmin=0.3,zmax=2.,wave_nsig=3.,ntrack=3,recursive=True)
     
-
         if results is None :
 
             dtype = list()
             for key in result.keys() :
                 dtype.append( (key, np.float32) ) # need to change this
+            
+            # add fit parameters
+            dtype.append( ("VDISP", np.float32) )
+            
             results = np.empty(nspec, dtype=dtype)
         for key in result.keys() :
             results[key][s]=result[key]
-
+        results["VDISP"][s]=np.mean(vdisps) # need to change this if we want different velocity dispersion per line
+        
         if truth_table_hdu is not None :
             log.info("%d fitted z=%f true z=%f\n"%(s,result["BEST_Z"],truth_table_hdu.data["TRUEZ"][spec]))
 
