@@ -30,6 +30,8 @@ def main() :
                         help = 'max number of spectra to fit')
     parser.add_argument('--first', type = int, default = 0, required=False,
                         help = 'first spectrum to fit')
+    parser.add_argument('--use-true-flux', action = 'store_true',
+                        help = 'use true flux for debugging if exists in bricks')
     
     
     args = parser.parse_args()
@@ -74,7 +76,14 @@ def main() :
 
 
     for spec,s in zip(elg_spectra[:nspec],range(nspec)) :
+
+
         flux=[b_brick.hdu_list[0].data[spec],r_brick.hdu_list[0].data[spec],z_brick.hdu_list[0].data[spec]]
+        
+        # hack for tests
+        if args.use_true_flux:
+            flux=[b_brick.hdu_list["_TRUEFLUX"].data[spec],r_brick.hdu_list["_TRUEFLUX"].data[spec],z_brick.hdu_list["_TRUEFLUX"].data[spec]]
+        
         ivar=[b_brick.hdu_list[1].data[spec],r_brick.hdu_list[1].data[spec],z_brick.hdu_list[1].data[spec]]
         wave=[b_brick.hdu_list[2].data,r_brick.hdu_list[2].data,z_brick.hdu_list[2].data]    
         resolution=[Resolution(native_endian(b_brick.hdu_list[3].data[spec])),Resolution(native_endian(r_brick.hdu_list[3].data[spec])),Resolution(native_endian(z_brick.hdu_list[3].data[spec]))]
@@ -98,6 +107,8 @@ def main() :
         
         if truth_table_hdu is not None :
             log.info("%d fitted z=%f true z=%f\n"%(s,result["BEST_Z"],truth_table_hdu.data["TRUEZ"][spec]))
+            # also need to compute the actual line fluxes
+            
 
 
     brickname = args.b
