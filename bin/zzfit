@@ -56,7 +56,7 @@ def main() :
     zmin=0.3 # min redshift of the scan
     zmax=2. # max redshift of the scan
     wave_nsig=3. # nsigma for profile fit (based on resolution and chosen velocity dispersion)
-    ntrack=3 # track 3 solutions
+    ntrack=5 # number of solutions to track 
     
     
     # line ratio priors are included in the chi2 fit, it makes sense only for doublets
@@ -109,7 +109,7 @@ def main() :
         result = zz_line_scan(wave=wave,flux=flux,ivar=ivar,resolution=resolution,
                               lines=lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,
                               line_ratio_constraints=line_ratio_constraints,
-                              zstep=0.001,zmin=0.3,zmax=2.,wave_nsig=3.,ntrack=3,recursive=True)
+                              zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=wave_nsig,ntrack=ntrack,recursive=True)
     
         if results is None :
 
