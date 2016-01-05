@@ -5,6 +5,7 @@ import numpy as np
 import scipy.sparse
 import math
 import sys
+import time
 
 def find_groups(lines,restframe_sigmas,resolution_sigma=1.,nsig=5.) :
     """
@@ -37,6 +38,7 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_prio
     """
     internal routine : fit line amplitudes and return delta chi2 with respect to zero amplitude
     """
+    log=get_logger()
     redshifted_lines=lines*(1+z)
     redshifted_sigmas=restframe_sigmas*(1+z) # this is the sigmas of all lines
     
@@ -105,34 +107,67 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_prio
         log.warning("cholesky_solve failed")
         return 1e5,np.zeros((lines.size)),np.zeros((lines.size))
     
+    
+
+
     # apply priors (outside of loop on groups)
     if line_ratio_priors is not None :
         for line_index in line_ratio_priors :
+            
             other_line_index = int(line_ratio_priors[line_index][0])
             min_ratio        = float(line_ratio_priors[line_index][1])
             max_ratio        = float(line_ratio_priors[line_index][2])
-            # ratio = this_line/other_line
-            norme = np.sum(line_amplitudes_ivar[[line_index,other_line_index]])
-            if norme==0 :
-                continue   
-            total_amplitude   = np.sum((line_amplitudes_ivar*line_amplitudes)[[line_index,other_line_index]])/norme
-
-            if total_amplitude==0 :
+            conserve_flux    = line_ratio_priors[line_index][3]
+            
+            # first ignore if one of the lines is not measured
+            if line_amplitudes_ivar[line_index]==0 or line_amplitudes_ivar[other_line_index]==0 :
                 continue
-            if line_amplitudes[other_line_index]==0 :
-                # use max allowed value
-                line_amplitudes[other_line_index] = total_amplitude/(1.+max_ratio)
-                line_amplitudes[line_index]       = total_amplitude*max_ratio/(1.+max_ratio)
-            else :
-                ratio = line_amplitudes[line_index]/line_amplitudes[other_line_index]
-                if ratio<min_ratio :
-                    line_amplitudes[other_line_index] = total_amplitude/(1.+min_ratio)
-                    line_amplitudes[line_index]       = total_amplitude*min_ratio/(1.+min_ratio)
-                elif ratio>max_ratio :
-                    line_amplitudes[other_line_index] = total_amplitude/(1.+max_ratio)
-                    line_amplitudes[line_index]       = total_amplitude*max_ratio/(1.+max_ratio)
 
-    # force non-negative here?
+            # if two lines are negatives ignore this
+            if line_amplitudes[line_index]<=0 and line_amplitudes[other_line_index]<=0 :
+                continue
+            
+            # the ratio prior is on flux(this_line)/flux(other_line)
+            if conserve_flux :
+                
+                total_flux = line_amplitudes[line_index]+line_amplitudes[other_line_index]
+                
+                if line_amplitudes[other_line_index]<=0 :
+                    ratio = 10000.
+                else :
+                    ratio = line_amplitudes[line_index]/line_amplitudes[other_line_index]
+                
+                if ratio > max_ratio :
+                    line_amplitudes[line_index] = max_ratio/(1.+max_ratio)*total_flux
+                    line_amplitudes[other_line_index] = 1./(1.+max_ratio)*total_flux
+                elif ratio < min_ratio :
+                    line_amplitudes[line_index] = min_ratio/(1.+min_ratio)*total_flux
+                    line_amplitudes[other_line_index] = 1./(1.+min_ratio)*total_flux
+            else :
+                # apply ratio to line with lowest snr :
+                this_snr=line_amplitudes[line_index]*math.sqrt(line_amplitudes_ivar[line_index])
+                other_snr=line_amplitudes[other_line_index]*math.sqrt(line_amplitudes_ivar[other_line_index])
+            
+                if this_snr < other_snr :
+                    apply_to_index = line_index
+                    ratio = line_amplitudes[line_index]/line_amplitudes[other_line_index]
+                    if ratio<min_ratio :                    
+                        line_amplitudes[line_index]  = line_amplitudes[other_line_index]*min_ratio
+                    elif ratio>max_ratio :
+                        line_amplitudes[line_index]  = line_amplitudes[other_line_index]*max_ratio
+                else :
+                    apply_to_index = other_line_index
+                    # and need to invert ratio
+                    min_ratio_tmp = 1./(max_ratio)
+                    max_ratio     = 1./(min_ratio+0.001*(min_ratio==0))
+                    min_ratio     = min_ratio_tmp
+                    ratio = line_amplitudes[other_line_index]/line_amplitudes[line_index]
+                    if ratio<min_ratio :                    
+                        line_amplitudes[other_line_index]  = line_amplitudes[line_index]*min_ratio
+                    elif ratio>max_ratio :
+                        line_amplitudes[other_line_index]  = line_amplitudes[line_index]*max_ratio
+    
+    # force non-negative here ?
     line_amplitudes[line_amplitudes<0]=0.
     
     # add chi2 for this group
@@ -226,7 +261,40 @@ class SolutionTracker :
         self.zscan.append(z)
         self.chi2scan.append(chi2)
 
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,recursive=True) :
+def chi2_of_line_ratio(list_of_results,lines,line_ratio_constraints) :
+        
+    nres=len(list_of_results)
+    chi2=np.zeros((nres))
+    log=get_logger()
+    for i,result in zip(range(nres),list_of_results) :
+        for line_index in line_ratio_constraints :
+            line2=int(lines[line_index])
+            line1=int(lines[line_ratio_constraints[line_index][0]])
+            min_ratio        = float(line_ratio_constraints[line_index][1])
+            max_ratio        = float(line_ratio_constraints[line_index][2])
+            flux2=result["FLUX_%dA"%line2]
+            err2=result["FLUX_ERR_%dA"%line2]
+            flux1=result["FLUX_%dA"%line1]
+            err1=result["FLUX_ERR_%dA"%line1]
+            if err1==0 or err2==0 : # can't tell
+                continue
+            if flux1<=0 : # tmp
+                flux1=err1
+            ratio=flux2/flux1
+            rerr=math.sqrt((err2/flux1)**2+(flux2*err1/flux1**2)**2)
+            log.debug("checking line ratio %dA/%dA  %f<? %f+-%f <? %f"%(line2,line1,min_ratio,ratio,rerr,max_ratio))
+            if ratio<min_ratio :
+                chi2[i] += (ratio-min_ratio)**2/rerr**2
+            elif ratio>max_ratio :
+                chi2[i] += (ratio-max_ratio)**2/rerr**2
+        log.debug("%d z=%f ratio chi2=%f spec chi2=%f"%(i,result["Z"],chi2[i],result["CHI2"]))
+    return chi2
+            
+            
+
+            
+            
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,recursive=True) :
 
     """
     args :
@@ -241,15 +309,21 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
       vdisps : fixed assumed velocity dispersions in km/s for the lines 
              one must have vdisps.size=lines.size
     options :
-      line_ratio_priors : dictionnary of priors on line ratio
+      line_ratio_priors : dictionnary of priors on line ratio USED IN CHI2
+             the key is the index in lines of this_line
+             the value is 1D array of size 4 : 
+                 array[0] = index of other_line
+                 array[1] = min allowed value of ratio flux[this_line]/flux[other_line]
+                 array[2] = max allowed value of ratio flux[this_line]/flux[other_line]
+                 array[3] = impose total flux conservation (boolean) 
+             line_ratio_priors can be set for a limited number of lines
+      line_ratio_constraints : dictionnary of priors on line ratio USED FOR RANK BEST SOLUTIONS
              the key is the index in lines of this_line
              the value is 1D array of size 3 : 
                  array[0] = index of other_line
                  array[1] = min allowed value of ratio flux[this_line]/flux[other_line]
-                 array[1] = max allowed value of ratio flux[this_line]/flux[other_line]
-             line_ratio_priors can be set for a limited number of lines
-
-     
+                 array[2] = max allowed value of ratio flux[this_line]/flux[other_line]
+             line_ratio_constraints can be set for a limited number of lines
       zstep  : step of redshift scan (linear)
       zmin   : force min value of redshift scan (default is automatic)
       zmax   : force max value of redshift scan (default is automatic)
@@ -297,7 +371,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     
     """
     
-   
+    start_time = time.clock( )
     log=get_logger()
     
     nframes=len(wave)
@@ -391,15 +465,16 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
 
         log.debug("first pass best z =%f chi2/ndata=%f, second z=%f dchi2=%f, third z=%f dchi2=%f"%(best_zs[0],best_chi2s[0]/ndata,best_zs[1],best_chi2s[1]-best_chi2s[0],best_zs[2],best_chi2s[2]-best_chi2s[0]))
 
+        
         #you want to see the redshift scan for this one ?
-        #import pylab
-        #pylab.plot(tracker.zscan,tracker.chi2scan)
-        #pylab.show()
-        #sys.exit(12)
+        import pylab
+        pylab.plot(tracker.zscan,tracker.chi2scan)
+        pylab.show()
+        sys.exit(12)
         
 
         # if recursive we refit here all of the best chi2s
-        best_results=None
+        best_results=[]
 
         full_zscan = np.array(tracker.zscan)
         full_chi2scan = np.array(tracker.chi2scan)
@@ -420,44 +495,49 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
             zmax      = best_zs[rank]+dz  
             zstep=(zmax-zmin)/100. # new refined zstep
             log.debug("for rank = %d zmin = %f zmax = %f zstep = %f"%(rank,zmin,zmax,zstep))
-            tmp_results = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1)
+            res = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1)
+            best_results.append(res)
             
-            
-            if rank == 0 :
-                # this is the best
-                best_results=tmp_results
-            else :
-                # here we replace the best values
-                labels=np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
-                for i in range(labels.size,ntrack) :
-                    labels=np.append(labels,np.array(["%dTH"%(i+1)])) # even more ridiculous
-                
-                label=labels[rank]
-                keys1=best_results.keys()
-                for k1 in keys1 :
-                    if k1.find("BEST")==0 :
-                        k2=k1.replace("BEST",label)
-                        best_results[k2] = tmp_results[k1]
-        
         # now that we have finished improving the fits,
-        # swap results if it turns out that the ranking has been modified by the improved fit     
+        # order results if it turns out that the ranking has been modified by the improved fit
         chi2=np.zeros((ntrack))
-        for i,l in zip(range(ntrack),rank_labels) :
-            chi2[i]=best_results[l+"_CHI2PDF"]
+        for i in range(ntrack) :
+            chi2[i]=best_results[i]["CHI2PDF"]
         indices=np.argsort(chi2)
         if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
-            swapped_best_results={}
+            swapped_best_results=[]
             for i in range(ntrack) :
-                new_label=rank_labels[i]
-                old_label=rank_labels[indices[i]]
-                for k in best_results :
-                    if k.find(old_label)==0 :
-                        swapped_best_results[k.replace(old_label,new_label)]=best_results[k]
+                swapped_best_results.append(best_results[indices[i]])
             best_results=swapped_best_results
         
-        
-        log.info("best z=%f+-%f chi2/ndf=%3.2f dchi2=%3.1f"%(best_results["BEST_Z"],best_results["BEST_Z_ERR"],best_results["BEST_CHI2PDF"],best_results["SECOND_CHI2"]-best_results["BEST_CHI2"]))
-        return best_results
+        # if we have line_ratio_constraints, move not satifying solutions to the end
+        if line_ratio_constraints is not None :
+            chi2_of_ratios=chi2_of_line_ratio(best_results,lines,line_ratio_constraints)
+            # use this info ?
+            if chi2_of_ratios[0]>0 : # we are outside of the line ratio bounds
+                indices=np.argsort(chi2_of_ratios)
+                if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
+                    log.warning("SWAPPING results based on chi2 of line ratios : best z %f -> %f"%(best_results[0]["Z"],best_results[indices[0]]["Z"]))
+                    swapped_best_results=[]
+                    for i in range(ntrack) :
+                        swapped_best_results.append(best_results[indices[i]])
+                    best_results=swapped_best_results
+
+        labels=np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
+        for i in range(labels.size,ntrack) :
+            labels=np.append(labels,np.array(["%dTH"%(i+1)])) # even more ridiculous
+        final_results={}
+        for i in range(ntrack) :
+            for k in best_results[i].keys() :
+                final_results["%s_%s"%(labels[i],k)]=best_results[i][k]
+                
+        #log.info("DEBUG DEBUG %f %f %f"%(final_results["BEST_CHI2PDF"],final_results["SECOND_CHI2PDF"],final_results["THIRD_CHI2PDF"]))
+           
+
+
+        end_time = time.clock( )
+        log.info("best z=%f+-%f chi2/ndf=%3.2f dchi2=%3.1f time=%f sec"%(final_results["BEST_Z"],final_results["BEST_Z_ERR"],final_results["BEST_CHI2PDF"],final_results["SECOND_CHI2"]-final_results["BEST_CHI2"],end_time-start_time))
+        return final_results
     
     # here we are outside of the recursive loop
             
@@ -473,18 +553,19 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     
     
     res={}
-    res["BEST_Z"]=best_zs[0]
-    res["BEST_Z_ERR"]=best_z_errors[0]
-    res["BEST_CHI2"]=best_chi2s[0]
-    res["BEST_CHI2PDF"]=best_chi2s[0]/ndf
-    res["BEST_SNR"]=snr
+    res["Z"]=best_zs[0]
+    res["Z_ERR"]=best_z_errors[0]
+    res["CHI2"]=best_chi2s[0]
+    res["CHI2PDF"]=best_chi2s[0]/ndf
+    res["SNR"]=snr
     
     for line_index in range(lines.size) :
         # need to normalize flux by the sigma of the gaussians used
         flux_scale = 1./(restframe_sigmas[line_index]*(1+best_zs[0]))
-        res["BEST_FLUX_%dA"%lines[line_index]]=flux_scale*best_z_line_amplitudes[line_index]
+        res["FLUX_%dA"%lines[line_index]]=flux_scale*best_z_line_amplitudes[line_index]
         livar=best_z_line_amplitudes_ivar[line_index]
-        res["BEST_FLUX_ERR_%dA"%lines[line_index]]=flux_scale*(livar>0)/math.sqrt(livar+(livar==0))
+        res["FLUX_ERR_%dA"%lines[line_index]]=flux_scale*(livar>0)/math.sqrt(livar+(livar==0))
     
-
+    
+    
     return res
