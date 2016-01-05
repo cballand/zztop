@@ -28,6 +28,8 @@ def main() :
                         help = 'path of output file')
     parser.add_argument('--nspec', type = int, default = None, required=False,
                         help = 'max number of spectra to fit')
+    parser.add_argument('--first', type = int, default = 0, required=False,
+                        help = 'first spectrum to fit')
     
     
     args = parser.parse_args()
@@ -41,7 +43,7 @@ def main() :
     r_brick=Brick(args.r)
     z_brick=Brick(args.z)
     
-    elg_spectra=np.where(b_brick.hdu_list[7].data["OBJTYPE"]=="ELG")[0]
+    elg_spectra=np.where(b_brick.hdu_list[7].data["OBJTYPE"][args.first:]=="ELG")[0]+args.first
     
     # all
     lines=np.array([3727.092,3729.875,4862.708,4960.295,5008.240,6564.603])

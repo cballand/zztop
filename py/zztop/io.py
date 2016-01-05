@@ -39,7 +39,7 @@ def write_zbest(filename, brickname, targetids, zztop_results, truth_table_hdu=N
     data['TARGETID']  = targetids
     
     data['Z']         = zztop_results["BEST_Z"]
-    data['ZERR']      = zztop_results["BEST_Z_ERR"]
+    #data['ZERR']      = zztop_results["BEST_Z_ERR"] # need to redo this
     # need to rafine this
     data['ZWARN']     = zztop_results["BEST_CHI2"]<zztop_results["SECOND_CHI2"]-9.
     # need to fill TYPE and SUBTYPE

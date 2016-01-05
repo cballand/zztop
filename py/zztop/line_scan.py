@@ -154,7 +154,111 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_prio
     # return
     return dchi2,line_amplitudes,line_amplitudes_ivar
 
+class SolutionTracker :
     
+    def __init__(self) :
+        self.zscan = []
+        self.chi2scan = []
+
+        """
+        self.ntrack=ntrack
+        self.big_number=1e12
+        self.best_chi2s     = self.big_number*np.ones((self.ntrack))
+        self.best_zs        = np.zeros((self.ntrack))
+        self.chi2s_at_best_z_minus_zstep = self.big_number*np.ones((self.ntrack))
+        self.chi2s_at_best_z_plus_zstep  = self.big_number*np.ones((self.ntrack))
+        self.previous_is_at_rank=-1
+        self.previous_chi2  = self.big_number
+        self.previous_z     = 0.
+        self.chi2_has_increased = True
+        self.log=get_logger()
+        """
+        
+    
+    def find_best(self,ntrack=3,min_delta_z=0.002) :
+        # first convert into np arrays
+        zscan = np.array(self.zscan)
+        chi2scan = np.array(self.chi2scan)
+        nfound=0        
+        zz=[]
+        ze=[]
+        cc=[]
+        # loop on minima
+        while(nfound<ntrack) :
+            if chi2scan.size == 0 :
+                break
+            ibest=np.argmin(chi2scan)
+            zbest=zscan[ibest]
+            chi2best=chi2scan[ibest]
+            zz.append(zbest)
+            cc.append(chi2best)
+            
+            nfound += 1
+            
+            # estimate error
+            dz=0.
+            # >z side            
+            for i in range(ibest+1,zscan.size) :
+                if chi2scan[i]>chi2best+1 :
+                    break                 
+                dz=abs(zscan[i]-zbest)
+            # <z side            
+            for i in range(ibest-1,-1,-1) :
+                if chi2scan[i]>chi2best+1 :
+                    break                 
+                dz=max(abs(zbest-zscan[i]),dz)
+            ze.append(dz) # can be null
+            
+
+            # remove region around local minimum
+            mask=np.zeros((zscan.size))
+            mask[ibest]=1
+            # remove whole local minimum
+            # >z side
+            previous_chi2=chi2best
+            for i in range(ibest+1,zscan.size) :
+                if chi2scan[i]>previous_chi2 :
+                    mask[i]=1
+                    previous_chi2=chi2scan[i]                    
+                else :
+                    break
+            # <z side
+            previous_chi2=chi2best
+            for i in range(ibest-1,-1,-1) :
+                if chi2scan[i]>previous_chi2 :
+                    mask[i]=1
+                    previous_chi2=chi2scan[i]
+                else :
+                    break
+            # add extra regions
+            mask[np.abs(zscan-zbest)<min_delta_z]=1
+            # apply mask
+            zscan=zscan[mask==0]
+            chi2scan=chi2scan[mask==0]
+        
+        return np.array(zz),np.array(ze),np.array(cc)
+
+    def add(self,z,chi2) :      
+        self.zscan.append(z)
+        self.chi2scan.append(chi2)
+
+"""
+    def estimate_redshift_errors_and_interpolate_best_solutions(self,zstep) :
+        # using second derivative of chi2
+        best_z_errors = np.zeros((self.ntrack))
+        for rank in range(self.best_zs.size) :
+            coeffs=np.polyfit([self.best_zs[rank]-zstep,self.best_zs[rank],self.best_zs[rank]+zstep],[self.chi2s_at_best_z_minus_zstep[rank],self.best_chi2s[rank],self.chi2s_at_best_z_plus_zstep[rank]],2)
+            a=coeffs[0]
+            b=coeffs[1]
+            c=coeffs[2]
+    
+            best_z_errors[rank] = zstep
+            if a>0 :
+                self.best_zs[rank]       = -b/(2*a)
+                self.best_chi2s[rank]    = c-b**2/(4*a)
+                best_z_errors[rank] = 1./math.sqrt(a)
+        return best_z_errors
+"""    
 
 def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,recursive=True) :
 
@@ -282,25 +386,15 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     zmin=max(zmin,np.min(zrange[:,0]))
     zmax=min(zmax,np.max(zrange[:,1]))
     
-    log.debug("z min=%f z max=%f"%(zmin,zmax))
+    log.debug("zmin=%f zmax=%f zstep=%f"%(zmin,zmax,zstep))
     
     
     # compute one highres gaussian to go faster and not call exp() after
     x=np.linspace(-5.,5.,100)
     gx=1./math.sqrt(2*math.pi)*np.exp(-0.5*x**2)
-    
-    nbz=ntrack
-    best_zs=np.zeros((nbz))
-    best_z_errors=np.zeros((nbz))
-    best_chi2s=1e12*np.ones((nbz))
-    chi2s_at_best_z_minus_zstep=np.zeros((nbz))
-    chi2s_at_best_z_plus_zstep=np.zeros((nbz))
-    
-    previous_chi2=0
-    previous_is_at_rank=-1
-    
-    best_z_line_amplitudes=np.zeros((lines.size))       # save this
-    best_z_line_amplitudes_ivar=np.zeros((lines.size))  # save this
+        
+    # create tracker
+    tracker = SolutionTracker()
     
     # compute chi2 for zero lines
     chi2_0 = 0.
@@ -308,84 +402,63 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
         chi2_0 += np.sum(ivar[frame_index]*flux[frame_index]**2)
     
     # redshift scan
+    best_chi2 = 0
     for z in np.linspace(zmin,zmax,num=int((zmax-zmin)/zstep+1)) :
 
         # the whole fit happens here
         dchi2,line_amplitudes,line_amplitudes_ivar = zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_priors,z,wave_nsig,x,gx,groups)
         chi2 = chi2_0 + dchi2
         
-        # now we have to keep track of several solutions
-        if chi2<np.max(best_chi2s) :
-            
-            # find position depending on value of chi2
-            i=np.where(chi2<best_chi2s)[0][0]
-            # do we replace or insert and shift the other
-            if abs(z-best_zs[i])>0.0033*(1+z) : # outside of catas. failure range
-                # we insert, meaning we have to shift the others
-                # else we replace and have nothing to do here
-                best_zs[i+1:]=best_zs[i:-1]
-                best_chi2s[i+1:]=best_chi2s[i:-1]
-                chi2s_at_best_z_minus_zstep[i+1:]=chi2s_at_best_z_minus_zstep[i:-1]
-                chi2s_at_best_z_plus_zstep[i+1:]=chi2s_at_best_z_plus_zstep[i:-1]
-            
-            best_chi2s[i]=chi2
-            best_zs[i]=z
-            chi2s_at_best_z_minus_zstep[i]=previous_chi2
+        # keep best
+        if chi2<best_chi2 or best_chi2==0 :
             best_z_line_amplitudes=line_amplitudes
             best_z_line_amplitudes_ivar=line_amplitudes_ivar
-            previous_is_at_rank=i
-        else :
-            if previous_is_at_rank>=0 :
-                chi2s_at_best_z_plus_zstep[previous_is_at_rank]=chi2
-            previous_is_at_rank=-1
 
-        #log.debug("scan z =%f chi2/ndf=%f"%(z,chi2/ndf))
-
-        previous_chi2=chi2
-        
+        # now we have to keep track of several solutions
+        tracker.add(z=z,chi2=chi2)
+    
+    log.debug("find_best in range %f %f (nz=%d)"%(tracker.zscan[0],tracker.zscan[-1],len(tracker.zscan)))
+    best_zs,best_z_errors,best_chi2s=tracker.find_best(ntrack=ntrack,min_delta_z=0.002)
+    best_z_errors[best_z_errors<zstep]=zstep
     
     
-    
+    #if not recursive :
+    #    log.debug("z = %f +- %f (zstep=%f)"%(best_zs[0],best_z_errors[0],zstep)) 
+    #    pylab.plot(tracker.zscan,tracker.chi2scan,"o-")
+    #    pylab.show()
+ 
     if recursive :
         log.debug("first pass best z =%f chi2/ndata=%f, second z=%f dchi2=%f, third z=%f dchi2=%f"%(best_zs[0],best_chi2s[0]/ndata,best_zs[1],best_chi2s[1]-best_chi2s[0],best_zs[2],best_chi2s[2]-best_chi2s[0]))
-        
-    
-    
-    for rank in range(best_zs.size) :
-        # we can use the values about best_chi2 to guess the uncertainty on z with a polynomial fit
-        coeffs=np.polyfit([best_zs[rank]-zstep,best_zs[rank],best_zs[rank]+zstep],[chi2s_at_best_z_minus_zstep[rank],best_chi2s[rank],chi2s_at_best_z_plus_zstep[rank]],2)
-        a=coeffs[0]
-        b=coeffs[1]
-        c=coeffs[2]
-    
-        best_z_errors[rank] = zstep
-        if a>0 :
-            best_zs[rank]       = -b/(2*a)
-            best_chi2s[rank]    = c-b**2/(4*a)
-            best_z_errors[rank] = 1./math.sqrt(a)
-    
+        #pylab.plot(tracker.zscan,tracker.chi2scan)
+        #pylab.show()
+        #sys.exit(12)
     
     if recursive :
+        # if recursive we refit here all of the best chi2s
         best_results=None
+
+        full_zscan = np.array(tracker.zscan)
+        full_chi2scan = np.array(tracker.chi2scan)
         
+
+        # define rank label for results
         rank_labels = np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
         for i in range(rank_labels.size,ntrack) :
             rank_labels=np.append(rank_labels,np.array(["%dTH"%(i+1)])) # even more ridiculous
         
+        # here we loop on all the tracked solutions
+        current_zstep = zstep
         for rank in range(best_zs.size) :
             # second loop about minimum
             # where we save things to compute errors
-            tmp_z       = best_zs[rank]
-            tmp_z_error = best_z_errors[rank]
-            if tmp_z_error>zstep :
-                tmp_z_error = zstep
-            tmp_z_error=max(tmp_z_error,0.0001)
-            z_nsig=2.
-            zmin=tmp_z-z_nsig*tmp_z_error
-            zmax=tmp_z+z_nsig*tmp_z_error
-            zstep=(zmax-zmin)/10
-            tmp_results = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False)
-
+            dz=current_zstep
+            zmin      = best_zs[rank]-dz
+            zmax      = best_zs[rank]+dz  
+            zstep=(zmax-zmin)/100. # new refined zstep
+            log.debug("for rank = %d zmin = %f zmax = %f zstep = %f"%(rank,zmin,zmax,zstep))
+            tmp_results = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1)
+            
+            
             if rank == 0 :
                 # this is the best
                 best_results=tmp_results
@@ -402,10 +475,11 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
                         k2=k1.replace("BEST",label)
                         best_results[k2] = tmp_results[k1]
         
+        # now that we have finished improving the fits,
         # swap results if it turns out that the ranking has been modified by the improved fit     
         chi2=np.zeros((ntrack))
         for i,l in zip(range(ntrack),rank_labels) :
-            chi2[i]=best_results[l+"_CHI2"]
+            chi2[i]=best_results[l+"_CHI2PDF"]
         indices=np.argsort(chi2)
         if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
             swapped_best_results={}
@@ -415,18 +489,29 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
                 for k in best_results :
                     if k.find(old_label)==0 :
                         swapped_best_results[k.replace(old_label,new_label)]=best_results[k]
+            #print "DEBUG : has swapped results"
+            #print best_results
+            #print swapped_best_results
             best_results=swapped_best_results
-
-        log.info("best z=%f+-%f chi2/ndf=%3.2f snr=%3.1f dchi2=%3.1f"%(best_results["BEST_Z"],best_results["BEST_Z_ERR"],best_results["BEST_CHI2PDF"],best_results["BEST_SNR"],best_results["SECOND_CHI2"]-best_results["BEST_CHI2"]))
+        
+        """
+        # check chi2 scan to increase error bar is other local minimum
+        # with delta chi2<1
+        dz=np.max(np.abs(full_zscan[full_chi2scan<(best_results["BEST_CHI2"]+1)]-best_results["BEST_Z"]))
+        #print "DEBUG dz=",dz
+        if dz>best_results["BEST_Z_ERR"] :
+            log.warning("increase BEST_Z_ERR %f -> %f because of other local minimum"%(best_results["BEST_Z_ERR"],dz))
+            best_results["BEST_Z_ERR"]=dz
+        """
+        log.info("best z=%f+-%f chi2/ndf=%3.2f dchi2=%3.1f"%(best_results["BEST_Z"],best_results["BEST_Z_ERR"],best_results["BEST_CHI2PDF"],best_results["SECOND_CHI2"]-best_results["BEST_CHI2"]))
         return best_results
     
-    
+    # here we are outside of the recursive loop
             
     
     ndf=0
     for index in range(nframes) :
         ndf += np.sum(ivar[index]>0)
-    
     ndf-=(np.sum(best_z_line_amplitudes_ivar>0)+1)
     
     snr=math.sqrt(np.sum(best_z_line_amplitudes**2*best_z_line_amplitudes_ivar))
@@ -440,6 +525,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,z
     res["BEST_CHI2"]=best_chi2s[0]
     res["BEST_CHI2PDF"]=best_chi2s[0]/ndf
     res["BEST_SNR"]=snr
+    
     for line_index in range(lines.size) :
         res["BEST_AMP_%02d"%line_index]=best_z_line_amplitudes[line_index]
         livar=best_z_line_amplitudes_ivar[line_index]
