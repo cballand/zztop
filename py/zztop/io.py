@@ -35,14 +35,22 @@ def write_zbest(filename, brickname, targetids, zztop_results, truth_table_hdu=N
     
     data = np.empty(zztop_results.size, dtype=dtype)
     
+    # required zfitter fields
+    
     data['BRICKNAME'] = brickname
     data['TARGETID']  = targetids
     
     data['Z']         = zztop_results["BEST_Z"]
     data['ZERR']      = zztop_results["BEST_Z_ERR"] # need to redo this
-    # need to rafine this
-    data['ZWARN']     = zztop_results["BEST_CHI2"]<zztop_results["SECOND_CHI2"]-9.
+
+    # need to tune this
+
+    #data['ZWARN']     = zztop_results["BEST_CHI2"]<zztop_results["SECOND_CHI2"]-9.
+    data['ZWARN']     = zztop_results["BEST_SNR"]<6 # this is giving 81% eff, 1% cata. failure
+    
     # need to fill TYPE and SUBTYPE
+
+    # add zztop results
     for k in zztop_results.dtype.names :
         data[k]=zztop_results[k]
     
