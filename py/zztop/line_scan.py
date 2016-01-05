@@ -467,10 +467,10 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
 
         
         #you want to see the redshift scan for this one ?
-        import pylab
-        pylab.plot(tracker.zscan,tracker.chi2scan)
-        pylab.show()
-        sys.exit(12)
+        #import pylab
+        #pylab.plot(tracker.zscan,tracker.chi2scan)
+        #pylab.show()
+        #sys.exit(12)
         
 
         # if recursive we refit here all of the best chi2s
