@@ -42,7 +42,7 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
 
     #z=1.334595
     #z=0.79
-    show=False
+    #show=False
     
     
     redshifted_lines=lines*(1+z)
@@ -93,12 +93,12 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
                 # convolve here with the spectrograph resolution
                 profile_of_lines[i]=frame_res_for_group.dot(prof)
             
-            if show and group_index==0 :
-                print "DEBUGGING !!!"
-                w=frame_wave
-                f=frame_flux
-                p0=profile_of_lines[0]
-                p1=profile_of_lines[1]
+            #if show and group_index==0 :
+            #    print "DEBUGGING !!!"
+            #    w=frame_wave
+            #    f=frame_flux
+            #    p0=profile_of_lines[0]
+            #    p1=profile_of_lines[1]
             
             
 
@@ -157,14 +157,14 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
             line_amplitudes[j]=line_amplitudes[i]/ratio
         
         
-    if show :
-        import pylab
-        pylab.plot(w,f)
-        pylab.plot(w,line_amplitudes[0]*p0)
-        pylab.plot(w,line_amplitudes[1]*p1)
-        pylab.plot(w,line_amplitudes[0]*p0+line_amplitudes[1]*p1)
-        print "DEBUGGING!!"
-        pylab.show()
+    #if show :
+    #        import pylab
+    #        pylab.plot(w,f)
+    #        pylab.plot(w,line_amplitudes[0]*p0)
+    #        pylab.plot(w,line_amplitudes[1]*p1)
+    #        pylab.plot(w,line_amplitudes[0]*p0+line_amplitudes[1]*p1)
+    #        print "DEBUGGING!!"
+    #        pylab.show()
     
     # apply priors (outside of loop on groups)
     if line_ratio_priors is not None :
