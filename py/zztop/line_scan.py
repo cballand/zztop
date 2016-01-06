@@ -34,13 +34,19 @@ def find_groups(lines,restframe_sigmas,resolution_sigma=1.,nsig=5.) :
     
     return groups
 
-def zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_priors,z,wave_nsig,x,gx,groups) :
+def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_nsig,x,gx,groups,fixed_line_ratio=None) :
     """
     internal routine : fit line amplitudes and return delta chi2 with respect to zero amplitude
     """
     log=get_logger()
+
+    #z=1.334595
+    #z=0.79
+    show=False
+    
+    
     redshifted_lines=lines*(1+z)
-    redshifted_sigmas=restframe_sigmas*(1+z) # this is the sigmas of all lines
+    redshifted_sigmas=lines*(vdisp/2.9970e5)*(1+z) # this is the sigmas of all lines
     
     delta_chi2_coeff_per_group={} # either a scalar or a vector per group (it's getting complicated)
 
@@ -73,27 +79,63 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_prio
                 
             # this is the block of the diagonal sparse matrix corresponding to the wavelength of interest :
             frame_res_for_group=scipy.sparse.dia_matrix((resolution[frame_index].data[:,wave_index], resolution[frame_index].offsets), shape=(wave_index.size, wave_index.size))
+            
+            
+            
                 
             # compute profiles    
             profile_of_lines=np.zeros((lines_in_group.size,frame_wave.size))
             for i,line_index,line,sig in zip(range(lines_in_group.size),lines_in_group,redshifted_lines[lines_in_group],redshifted_sigmas[lines_in_group]) :
 
-                # simple Gaussian given velocity dispersion
-                prof=np.interp((frame_wave-line)/sig,x,gx)
+                # simple Gaussian given velocity dispersion, correcty normalized to give integrated flux
+                prof=np.interp((frame_wave-line)/sig,x,gx)/sig
                 
                 # convolve here with the spectrograph resolution
                 profile_of_lines[i]=frame_res_for_group.dot(prof)
             
+            if show and group_index==0 :
+                print "DEBUGGING !!!"
+                w=frame_wave
+                f=frame_flux
+                p0=profile_of_lines[0]
+                p1=profile_of_lines[1]
+            
+            
+
             # fill amplitude system (A and B) :
             for i in range(nlines) :
                 B[lines_in_group[i]]   += np.sum(frame_ivar*profile_of_lines[i]*frame_flux)
                 for j in range(nlines) :
                     A[lines_in_group[i],lines_in_group[j]] += np.sum(frame_ivar*profile_of_lines[i]*profile_of_lines[j])
-        
+                    
+            
+            
+    
+    
     
     # solving outside of group to simplify the code even if it is supposedly slower (the matrix is nearly diagonal)
     line_amplitudes_ivar = np.diag(A)
     
+    
+    if fixed_line_ratio is not None :
+        
+        for i in fixed_line_ratio :
+            j=fixed_line_ratio[i][0]
+            ratio=fixed_line_ratio[i][1]
+            #log.debug("fixed ratio %d/%d = %f"%(lines[i],lines[j],ratio))
+            # f0=ratio*f1 (f0<f1)
+            # dmd0' = dmd0*(d0/d0') + dmd1*(d1/d0) =  dmd0 + dmd1*(1/ratio)
+            # aij = sum w(dmdi)(dmdj)
+            # a00' propto (dmd0')**2 = (dmd0 + dmd1/ratio)**2 propto a00+a11/ratio**2+2*a01/ratio
+            # b0'  propto  dmd0' = b0 + b1/ratio
+            # variable 1 disappears
+            
+            B[i]   += B[j]/ratio
+            A[i,i] += 1./ratio**2*A[j,j] + 2./ratio*A[i,j]
+            A[i,j] = 0
+            A[j,i] = 0
+            B[j]   = 0
+        # leave A[j,j] that wont affect amp0
     
     # give value to undefined lines (it's not a problem)
     for i in range(lines.size) :
@@ -107,9 +149,23 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_prio
         log.warning("cholesky_solve failed")
         return 1e5,np.zeros((lines.size)),np.zeros((lines.size))
     
+    if fixed_line_ratio is not None :
+        
+        for i in fixed_line_ratio :
+            j=fixed_line_ratio[i][0]
+            ratio=fixed_line_ratio[i][1]
+            line_amplitudes[j]=line_amplitudes[i]/ratio
+        
+        
+    if show :
+        import pylab
+        pylab.plot(w,f)
+        pylab.plot(w,line_amplitudes[0]*p0)
+        pylab.plot(w,line_amplitudes[1]*p1)
+        pylab.plot(w,line_amplitudes[0]*p0+line_amplitudes[1]*p1)
+        print "DEBUGGING!!"
+        pylab.show()
     
-
-
     # apply priors (outside of loop on groups)
     if line_ratio_priors is not None :
         for line_index in line_ratio_priors :
@@ -291,10 +347,49 @@ def chi2_of_line_ratio(list_of_results,lines,line_ratio_constraints) :
     return chi2
             
             
-
+def zz_subtract_continuum(wave,flux,ivar,wave_step=150.) :
+    
+    
+    # merge all data
+    allwave=wave[0]
+    allflux=flux[0]
+    allivar=ivar[0]
+    for index in range(1,len(wave)) :
+        allwave=np.append(allwave,wave[index])
+        allflux=np.append(allflux,flux[index])
+        allivar=np.append(allivar,ivar[index])
+    ii=np.argsort(allwave)
+    allwave=allwave[ii]
+    allflux=allflux[ii]
+    allivar=allivar[ii]
+    
+    
+    wmin=np.min(allwave[allivar>0])
+    wmax=np.max(allwave[allivar>0])
+    n=int((wmax-wmin)/wave_step)    
+    knots=wmin+(wmax-wmin)/(n+1)*(0.5+np.arange(n))
+    # iterative fitting and clipping (to remove dependence on emission lines!)
+    for loop in range(10) : 
+        toto=scipy.interpolate.splrep(allwave,allflux,k=3,task=-1,t=knots,w=allivar)
+        continuum=scipy.interpolate.splev(allwave,toto)
+        out=np.where(allivar*(allflux-continuum)**2>4.)[0]
+        if out.size==0 :
+            break
+        
+        allivar[out]=0.
+    
+    #import pylab
+    #pylab.plot(allwave,allflux,"-",c="b")
+    #pylab.plot(allwave,continuum,"-",c="r")
+    #pylab.plot(allwave,allivar*(allflux-continuum)**2,"-",c="k")
+    #pylab.show()
+    
+    subtracted_flux=[]
+    for index in range(len(wave)) :
+        subtracted_flux.append(flux[index]-np.interp(wave[index],allwave,continuum))
+    return subtracted_flux
             
-            
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,recursive=True) :
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,remove_continuum=True,recursive=True) :
 
     """
     args :
@@ -388,19 +483,15 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     log.debug("lines=%s"%str(lines))
     if line_ratio_priors is not None :
         log.debug("line_ratio_priors=%s"%str(line_ratio_priors))
-    log.debug("vdisps=%s"%str(vdisps))
+    log.debug("vdisps_fast=%s km/s"%str(vdisps_fast))
+    log.debug("vdisps_improved=%s km/s"%str(vdisps_improved))
     log.debug("zstep=%f"%zstep)
     log.debug("nframes=%d"%nframes)
     log.debug("nlines=%d"%(lines.size))
     
-    # consider Gaussian line profile
-    # sig=(line*v/c)*(1+z)
-    cspeed=2.9970e5 # km/s
-    restframe_sigmas=lines*vdisps/cspeed # sigma in rest-frame in A
-    
     # find group of lines that we have to fit together because they overlap
-    groups = find_groups(lines,restframe_sigmas)
-
+    groups = find_groups(lines,lines*np.max(vdisps_fast)/2.9970e5) # consider the largest velocity dispersion here
+    
     for g in groups :
         log.debug("group=%d lines=%s"%(g,lines[groups[g]]))
 
@@ -435,25 +526,45 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
         
     # create tracker
     tracker = SolutionTracker()
-    
+
+    # fit a continuum and remove it
+    if remove_continuum :
+        # use spline
+        flux_to_fit = zz_subtract_continuum(wave,flux,ivar)
+    else :
+        flux_to_fit = flux
+
     # compute chi2 for zero lines
     chi2_0 = 0.
     for frame_index in range(nframes) :
         chi2_0 += np.sum(ivar[frame_index]*flux[frame_index]**2)
-    
+        
+    line_amplitudes=np.zeros((lines.size))
+    line_amplitudes_ivar=np.zeros((lines.size))
+
     # redshift scan
     best_chi2 = 0
     for z in np.linspace(zmin,zmax,num=int((zmax-zmin)/zstep+1)) :
 
         # the whole fit happens here
-        dchi2,line_amplitudes,line_amplitudes_ivar = zz_line_fit(wave,flux,ivar,resolution,lines,restframe_sigmas,line_ratio_priors,z,wave_nsig,x,gx,groups)
+        # do a loop on range of velocity dispersion
+        dchi2=1e12
+        best_vdisp_for_z=0
+        for vdisp in vdisps_fast :
+            v_dchi2,v_line_amplitudes,v_line_amplitudes_ivar = zz_line_fit(wave,flux_to_fit,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_nsig,x,gx,groups,fixed_line_ratio=fixed_line_ratio)
+            if v_dchi2 < dchi2 :
+                dchi2=v_dchi2
+                line_amplitudes = v_line_amplitudes
+                line_amplitudes_ivar = v_line_amplitudes_ivar
+                best_vdisp_for_z = vdisp
+                #log.debug("vdisp=%f dchi2=%f amp=%s"%(best_vdisp_for_z,dchi2,line_amplitudes))
         chi2 = chi2_0 + dchi2
         
         # keep best
         if chi2<best_chi2 or best_chi2==0 :
-            best_z_line_amplitudes=line_amplitudes
-            best_z_line_amplitudes_ivar=line_amplitudes_ivar
-
+            best_z_line_amplitudes=line_amplitudes.copy()
+            best_z_line_amplitudes_ivar=line_amplitudes_ivar.copy()
+            best_vdisp = best_vdisp_for_z
         # now we have to keep track of several solutions
         tracker.add(z=z,chi2=chi2)
     
@@ -495,7 +606,9 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
             zmax      = best_zs[rank]+dz  
             zstep=(zmax-zmin)/100. # new refined zstep
             log.debug("for rank = %d zmin = %f zmax = %f zstep = %f"%(rank,zmin,zmax,zstep))
-            res = zz_line_scan(wave,flux,ivar,resolution,lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1)
+            res = zz_line_scan(wave,flux_to_fit,ivar,resolution,lines,vdisps_fast=vdisps_improved,vdisps_improved=None,
+                               line_ratio_priors=line_ratio_priors,fixed_line_ratio=fixed_line_ratio,
+                               zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1,remove_continuum=False)
             best_results.append(res)
             
         # now that we have finished improving the fits,
@@ -558,13 +671,13 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     res["CHI2"]=best_chi2s[0]
     res["CHI2PDF"]=best_chi2s[0]/ndf
     res["SNR"]=snr
+    res["VDISP"]=best_vdisp
     
     for line_index in range(lines.size) :
         # need to normalize flux by the sigma of the gaussians used
-        flux_scale = 1./(restframe_sigmas[line_index]*(1+best_zs[0]))
-        res["FLUX_%dA"%lines[line_index]]=flux_scale*best_z_line_amplitudes[line_index]
+        res["FLUX_%dA"%lines[line_index]]=best_z_line_amplitudes[line_index]
         livar=best_z_line_amplitudes_ivar[line_index]
-        res["FLUX_ERR_%dA"%lines[line_index]]=flux_scale*(livar>0)/math.sqrt(livar+(livar==0))
+        res["FLUX_ERR_%dA"%lines[line_index]]=(livar>0)/math.sqrt(livar+(livar==0))
     
     
     

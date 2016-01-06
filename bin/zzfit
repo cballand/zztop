@@ -30,8 +30,8 @@ def main() :
                         help = 'max number of spectra to fit')
     parser.add_argument('--first', type = int, default = 0, required=False,
                         help = 'first spectrum to fit')
-    parser.add_argument('--use-true-flux', action = 'store_true',
-                        help = 'use true flux for debugging if exists in bricks')
+    parser.add_argument('--use-truth', action = 'store_true',
+                        help = 'use true flux and true vdisp for debugging if exists in bricks')
     
     
     args = parser.parse_args()
@@ -51,27 +51,41 @@ def main() :
     ## fit parameters
     #########################################
     lines=np.array([3727.092,3729.875,4862.708,4960.295,5008.240,6564.603])
-    vdisps=90.*np.ones(lines.size) # same velocity dispersion , in km/s (can do different)
+    vdisps_fast=np.array([100]) # test all of these velocity dispersions, same for all lines , in km/s , for the first redshift scan
+    #vdisps_improved=np.array([50,60,70,80,90,100,110,120,130,140,150]) # same for the second refined redshift scan
+    vdisps_improved=np.array([50,100,150]) # same for the second refined redshift scan
     zstep=0.001 # z step of the scan
     zmin=0.3 # min redshift of the scan
     zmax=2. # max redshift of the scan
     wave_nsig=3. # nsigma for profile fit (based on resolution and chosen velocity dispersion)
-    ntrack=5 # number of solutions to track 
+    ntrack=8 # number of solutions to track 
+    remove_continuum=True # remove continuum prior to the fit of lines
     
     
+    
+   
     # line ratio priors are included in the chi2 fit, it makes sense only for doublets
     # line_ratio_priors[INDEX_OF_LINE_2]=[INDEX_OF_LINE_1,min(LINE_2/LINE_1),max(LINE_2/LINE_1),conserve_sum_of_fluxes]
-    line_ratio_priors={} 
-    line_ratio_priors[1]=[0,0.6,0.85,True] # prior on 3729/3727 line ratio 
+    line_ratio_priors=None
+    #line_ratio_priors={} 
+    #line_ratio_priors[0]=[1,0.6,0.85,True] # prior on 3727/3729 line ratio 
+    
+    # force line ratios in the fit
+    # fixed_line_ratio[INDEX_OF_LINE_2]=[INDEX_OF_LINE_1,flux(LINE_2/LINE_1)]
+    #fixed_line_ratio=None
+    fixed_line_ratio={}
+    fixed_line_ratio[0]=[1,0.7] # fixed 3727/3729 line ratio 
     
     # line ratio constraints are used to rank best fits among the few solutions that are found based on chi2
     # line_ratio_constraints[INDEX_OF_LINE_2]=[INDEX_OF_LINE_1,min(LINE_2/LINE_1),max(LINE_2/LINE_1)]
-    line_ratio_constraints={} 
-    line_ratio_constraints[2]=[0,0.,1.] # constraint on 4862/3727 line ratio 
-    line_ratio_constraints[3]=[0,0.,0.5] # constraint on 4862/3727 line ratio 
-    line_ratio_constraints[4]=[0,0.,0.5] # constraint on 5008/3727 line ratio 
-    # don't have 6564 in the training sample yet
-    log.warning("line_ratio_constraints are not implemented yet")
+    line_ratio_constraints=None
+    if True :     
+        line_ratio_constraints={} 
+        line_ratio_constraints[2]=[1,0.,1.5] # constraint on 4862/3729 line ratio 
+        line_ratio_constraints[3]=[1,0.,0.4] # constraint on 4960/3729 line ratio 
+        line_ratio_constraints[4]=[1,0.,1.] # constraint on 5008/3729 line ratio 
+        # don't have 6564 in the training sample yet
+        
     
     #########################################
 
@@ -100,16 +114,20 @@ def main() :
         flux=[b_brick.hdu_list[0].data[spec],r_brick.hdu_list[0].data[spec],z_brick.hdu_list[0].data[spec]]
         
         # for tests
-        if args.use_true_flux:
+        if args.use_truth :
             flux=[b_brick.hdu_list["_TRUEFLUX"].data[spec],r_brick.hdu_list["_TRUEFLUX"].data[spec],z_brick.hdu_list["_TRUEFLUX"].data[spec]]
+            vdisps_fast=[b_brick.hdu_list["_TRUTH"].data["VDISP"][spec]]
+            vdisps_improved=[b_brick.hdu_list["_TRUTH"].data["VDISP"][spec]]
         
         ivar=[b_brick.hdu_list[1].data[spec],r_brick.hdu_list[1].data[spec],z_brick.hdu_list[1].data[spec]]
         wave=[b_brick.hdu_list[2].data,r_brick.hdu_list[2].data,z_brick.hdu_list[2].data]    
         resolution=[Resolution(native_endian(b_brick.hdu_list[3].data[spec])),Resolution(native_endian(r_brick.hdu_list[3].data[spec])),Resolution(native_endian(z_brick.hdu_list[3].data[spec]))]
         result = zz_line_scan(wave=wave,flux=flux,ivar=ivar,resolution=resolution,
-                              lines=lines,vdisps=vdisps,line_ratio_priors=line_ratio_priors,
-                              line_ratio_constraints=line_ratio_constraints,
-                              zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=wave_nsig,ntrack=ntrack,recursive=True)
+                              lines=lines,vdisps_fast=vdisps_fast,vdisps_improved=vdisps_improved,line_ratio_priors=line_ratio_priors,
+                              line_ratio_constraints=line_ratio_constraints,fixed_line_ratio=fixed_line_ratio,
+                              zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=wave_nsig,ntrack=ntrack,
+                              remove_continuum=remove_continuum,
+                              recursive=True)
     
         if results is None :
 
@@ -123,7 +141,7 @@ def main() :
             results = np.empty(nspec, dtype=dtype)
         for key in result.keys() :
             results[key][s]=result[key]
-        results["VDISP"][s]=np.mean(vdisps) # need to change this if we want different velocity dispersion per line
+        
         
         if truth_table_hdu is not None :
             log.info("%d fitted z=%f true z=%f\n"%(s,result["BEST_Z"],truth_table_hdu.data["TRUEZ"][spec]))
