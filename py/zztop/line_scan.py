@@ -114,7 +114,7 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
     
     
     # solving outside of group to simplify the code even if it is supposedly slower (the matrix is nearly diagonal)
-    line_amplitudes_ivar = np.diag(A)
+    line_amplitudes_ivar = np.diag(A).copy()
     
     
     if fixed_line_ratio is not None :
@@ -155,7 +155,16 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
             j=fixed_line_ratio[i][0]
             ratio=fixed_line_ratio[i][1]
             line_amplitudes[j]=line_amplitudes[i]/ratio
-        
+            # total ivar is in line_amplitudes_ivar[i], split by half to preserve sum flux uncertainty
+            # total flux      = (1 + 1/ratio)* amp_i
+            # total flux var  = (1 + 1/ratio)**2 * amp_i_var
+            # total flux ivar = 1/(1 + 1/ratio)**2 * amp_i_ivar
+            total_flux_ivar = 1./(1+1/ratio)**2 * line_amplitudes_ivar[i]
+            # total flux ivar ~ sqrt(2)* amp_i(j)_ivar
+            line_amplitudes_ivar[i] = total_flux_ivar/math.sqrt(2.)
+            line_amplitudes_ivar[j] = total_flux_ivar/math.sqrt(2.)
+            
+            
         
     #if show :
     #        import pylab
@@ -322,28 +331,28 @@ def chi2_of_line_ratio(list_of_results,lines,line_ratio_constraints) :
     nres=len(list_of_results)
     chi2=np.zeros((nres))
     log=get_logger()
+    refchi2=list_of_results[0]["CHI2"]
     for i,result in zip(range(nres),list_of_results) :
-        for line_index in line_ratio_constraints :
-            line2=int(lines[line_index])
-            line1=int(lines[line_ratio_constraints[line_index][0]])
-            min_ratio        = float(line_ratio_constraints[line_index][1])
-            max_ratio        = float(line_ratio_constraints[line_index][2])
+        for c in line_ratio_constraints :
+            line1=int(lines[c[0]])
+            line2=int(lines[c[1]])
+            min_ratio        = float(c[2])
+            max_ratio        = float(c[3])
             flux2=result["FLUX_%dA"%line2]
             err2=result["FLUX_ERR_%dA"%line2]
             flux1=result["FLUX_%dA"%line1]
             err1=result["FLUX_ERR_%dA"%line1]
-            if err1==0 or err2==0 : # can't tell
+            if err1==0 or err2==0 or flux2<=0 : # can't tell
+                log.debug("z=%f cannot check line ratio %dA/%dA"%(result["Z"],line1,line2))
                 continue
-            if flux1<=0 : # tmp
-                flux1=err1
-            ratio=flux2/flux1
-            rerr=math.sqrt((err2/flux1)**2+(flux2*err1/flux1**2)**2)
-            log.debug("checking line ratio %dA/%dA  %f<? %f+-%f <? %f"%(line2,line1,min_ratio,ratio,rerr,max_ratio))
+            ratio=flux1/flux2
+            rerr=math.sqrt((err1/flux2)**2+(flux1*err2/flux2**2)**2)
+            log.debug("z=%f checking line ratio %dA/%dA  %f<? %f+-%f <? %f"%(result["Z"],line1,line2,min_ratio,ratio,rerr,max_ratio))
             if ratio<min_ratio :
                 chi2[i] += (ratio-min_ratio)**2/rerr**2
             elif ratio>max_ratio :
                 chi2[i] += (ratio-max_ratio)**2/rerr**2
-        log.debug("%d z=%f ratio chi2=%f spec chi2=%f"%(i,result["Z"],chi2[i],result["CHI2"]))
+        log.debug("z=%f ratio chi2=%f tot. dchi2=%f"%(result["Z"],chi2[i],chi2[i]+result["CHI2"]-refchi2))
     return chi2
             
             
@@ -615,7 +624,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,lin
         # order results if it turns out that the ranking has been modified by the improved fit
         chi2=np.zeros((ntrack))
         for i in range(ntrack) :
-            chi2[i]=best_results[i]["CHI2PDF"]
+            chi2[i]=best_results[i]["CHI2"]
         indices=np.argsort(chi2)
         if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
             swapped_best_results=[]
@@ -623,18 +632,21 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,lin
                 swapped_best_results.append(best_results[indices[i]])
             best_results=swapped_best_results
         
-        # if we have line_ratio_constraints, move not satifying solutions to the end
+        # if we have line_ratio_constraints, use them
+        # add spectral fit chi2 to line ratio chi2 and reorder
+        # this is still not perfect ...
         if line_ratio_constraints is not None :
             chi2_of_ratios=chi2_of_line_ratio(best_results,lines,line_ratio_constraints)
-            # use this info ?
-            if chi2_of_ratios[0]>0 : # we are outside of the line ratio bounds
-                indices=np.argsort(chi2_of_ratios)
-                if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
-                    log.warning("SWAPPING results based on chi2 of line ratios : best z %f -> %f"%(best_results[0]["Z"],best_results[indices[0]]["Z"]))
-                    swapped_best_results=[]
-                    for i in range(ntrack) :
-                        swapped_best_results.append(best_results[indices[i]])
-                    best_results=swapped_best_results
+            chi2=np.zeros((ntrack))
+            for i in range(ntrack) :
+                chi2[i]=best_results[i]["CHI2"]+chi2_of_ratios[i]
+            indices=np.argsort(chi2)
+            if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
+                log.warning("SWAPPING results based on chi2 of line ratios : best z %f -> %f"%(best_results[0]["Z"],best_results[indices[0]]["Z"]))
+                swapped_best_results=[]
+                for i in range(ntrack) :
+                    swapped_best_results.append(best_results[indices[i]])
+                best_results=swapped_best_results
 
         labels=np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
         for i in range(labels.size,ntrack) :

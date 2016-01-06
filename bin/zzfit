@@ -50,7 +50,7 @@ def main() :
     #########################################
     ## fit parameters
     #########################################
-    lines=np.array([3727.092,3729.875,4862.708,4960.295,5008.240,6564.603])
+    lines=np.array([3727.092,3729.875,4862.708,4960.295,5008.240,6564.603])#,3890.151,4102.892,4341.684])
     vdisps_fast=np.array([100]) # test all of these velocity dispersions, same for all lines , in km/s , for the first redshift scan
     #vdisps_improved=np.array([50,60,70,80,90,100,110,120,130,140,150]) # same for the second refined redshift scan
     vdisps_improved=np.array([50,100,150]) # same for the second refined redshift scan
@@ -76,14 +76,17 @@ def main() :
     fixed_line_ratio={}
     fixed_line_ratio[0]=[1,0.7] # fixed 3727/3729 line ratio 
     
-    # line ratio constraints are used to rank best fits among the few solutions that are found based on chi2
+    # line ratio constraints are used to rank best fits among the few solutions that are saved based on spectrum fit chi2
     # line_ratio_constraints[INDEX_OF_LINE_2]=[INDEX_OF_LINE_1,min(LINE_2/LINE_1),max(LINE_2/LINE_1)]
     line_ratio_constraints=None
     if True :     
-        line_ratio_constraints={} 
-        line_ratio_constraints[2]=[1,0.,1.5] # constraint on 4862/3729 line ratio 
-        line_ratio_constraints[3]=[1,0.,0.4] # constraint on 4960/3729 line ratio 
-        line_ratio_constraints[4]=[1,0.,1.] # constraint on 5008/3729 line ratio 
+        line_ratio_constraints=[] 
+        #line_ratio_constraints[2]=[1,0.,1.5] # constraint on 4862/3729 line ratio 
+        #line_ratio_constraints[3]=[1,0.,0.4] # constraint on 4960/3729 line ratio 
+        #line_ratio_constraints[4]=[1,0.,1.] # constraint on 5008/3729 line ratio 
+        line_ratio_constraints.append([1,2,0.5,4.]) # constraint on 3729/4862 line ratio 
+        line_ratio_constraints.append([1,3,2.,16.]) # constraint on 3729/4960 line ratio 
+        line_ratio_constraints.append([1,4,1.,100000.]) # constraint on 3729/5008 line ratio 
         # don't have 6564 in the training sample yet
         
     
