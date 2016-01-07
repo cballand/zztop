@@ -32,11 +32,11 @@ zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --outfile z
 plot_zzbest.py -i zzbest.fits
 ```
 
-For debugging :
+For debugging, examples :
 ```
 export DESI_LOGLEVEL=DEBUG
 
-zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --use-truth --outfile zzbest-truth.fits --ncpu 4
+zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --use-truth --outfile zzbest-truth.fits --ncpu 1 --first 4 --nspec 1 
 ```
 
 
