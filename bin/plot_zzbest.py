@@ -6,6 +6,16 @@ import pylab
 import numpy as np
 from math import *
 
+def plot_ratio(a,res,deltaz,good,line1,line2) :
+    ok=np.where(res["BEST_FLUX_%dA"%line2]>0)
+    x=res["BEST_FLUX_%dA"%line1][ok]/res["BEST_FLUX_%dA"%line2][ok]
+    a.plot(x,deltaz[ok],"o",c="b")
+    ok=np.where(res["BEST_FLUX_%dA"%line2][good]>0)
+    x=res["BEST_FLUX_%dA"%line1][good[ok]]/res["BEST_FLUX_%dA"%line2][good[ok]]
+    a.plot(x,deltaz[ok],"o",c="r")
+    print "min max %d/%d = %f , %f"%( line1,line2,np.min(x),np.max(x) )
+    a.set_xlabel("%d/%d"%(line1,line2))
+    
 def main() :
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -26,6 +36,16 @@ def main() :
     truez=truth["TRUEZ"]
     bestz=res["Z"]
     errz=res["ZERR"]
+    nlines_above_nsig=np.zeros((res["BEST_FLUX_3727A"].size))
+    lines=[3727,3729,4341,4862,4960,5008,6564]
+    for line in lines :
+        flux=res["BEST_FLUX_%dA"%line]
+        err=res["BEST_FLUX_ERR_%dA"%line]
+        nlines_above_nsig += ((err>0)*(flux/(err+(err==0)))>3.)
+    
+    oIIflux=(res["BEST_FLUX_3727A"]+res["BEST_FLUX_3729A"])
+    oIIfluxerr=np.sqrt(res["BEST_FLUX_ERR_3727A"]**2+res["BEST_FLUX_ERR_3729A"]**2)
+    oIInsig=(oIIfluxerr>0)*oIIflux/(oIIfluxerr+(oIIfluxerr==0))
     
     if True :
         # try to see if better solutions exist in range of results
@@ -51,7 +71,7 @@ def main() :
     errz=errz
     truez=truez
     dchi2=res["SECOND_CHI2"]-res["BEST_CHI2"]
-    oIIflux=(res["BEST_FLUX_3727A"]+res["BEST_FLUX_3729A"])
+    
 
     good=np.where(np.abs(deltaz)<0.005)[0]
     print "based on |dz|<0.005 (after default choice of best solution):"
@@ -61,12 +81,14 @@ def main() :
     print "bias = %f +- %f"%(np.mean(deltaz[good]),np.std(deltaz[good])/np.sqrt(good.size))
     print ""
     
-    dchi2min=0 # 
-    snrmin=0 # 
-    oIIfluxmin=5.
-
-    ok=np.where((res["BEST_SNR"]>snrmin)&(oIIflux>oIIfluxmin))[0]
-    print "based on dchi2>%d and SNR>%f and oIIflux>%f :"%(dchi2min,snrmin,oIIfluxmin)
+    dchi2min=5 # 
+    snrmin=5 # 
+    oIIfluxmin=0.
+    ok=np.where((dchi2>dchi2min)&(res["BEST_SNR"]>snrmin)&(oIIflux>oIIfluxmin))[0]
+    #print "based on dchi2>%d and SNR>%f and oIIflux>%f :"%(dchi2min,snrmin,oIIfluxmin)
+    
+    ok=np.where((nlines_above_nsig>=2)|(oIInsig>5))[0]
+    print "based on nlines>=2 with 3sig, or OII SNR>5"
     print "==========================="
     print "efficiency tot = %d/%d = %f"%(ok.size,n,ok.size/float(n))
     bad=np.where(np.abs(deltaz[ok])>0.005)[0]
@@ -152,45 +174,12 @@ def main() :
     a.set_xlabel("best chi2pdf")
     a.set_ylabel("Best - True Redshift")
     
-    """
-    a=pylab.subplot(ny,nx,ai); ai +=1 
-    a.errorbar(np.log10(truth["OIIFLUX"]),deltaz,errz,fmt="o")   
-    a.set_xlabel("true log10(OIIflux)")
-    a.set_ylabel("Best - True Redshift")
-    
-    a=pylab.subplot(ny,nx,ai); ai +=1 
-    ok=np.where((np.abs(deltaz)<0.005)&(res["BEST_FLUX_3727A"]>0))[0]
-    ratio=res["BEST_FLUX_3729A"][ok]/res["BEST_FLUX_3727A"][ok]
-    a.plot(truth["OIIDOUBLET"][ok],ratio,"o")   
-    #a.plot(deltaz,"o")   
-    a.set_xlabel("true OII doublet")
-    a.set_ylabel("meas. OII doublet")
-    
-
-    a=pylab.subplot(ny,nx,ai); ai +=1 
-    ok=np.where(np.abs(deltaz)<0.005)[0]
-    oIIflux=(res["BEST_FLUX_3727A"]+res["BEST_FLUX_3729A"])[ok]*1e-17
-    oIIfluxerr=np.sqrt(res["BEST_FLUX_ERR_3727A"]**2+res["BEST_FLUX_ERR_3729A"]**2)[ok]*1e-17
-    a.errorbar(truth["OIIFLUX"][ok],oIIflux,oIIfluxerr,fmt="o")
-    """
-    
-    #a.plot(deltaz,"o")   
-    a.set_xlabel("true OII flux")
-    a.set_ylabel("meas. OII flux")
-    
     
     
     a=pylab.subplot(ny,nx,ai); ai +=1 
     
-    nlines_above_nsig=np.zeros((res["BEST_FLUX_3727A"].size))
-    snr=np.zeros((res["BEST_FLUX_3727A"].size))
-    lines=[3727,3729,4862,4960,5008,6564]
-    for line in lines :
-        flux=res["BEST_FLUX_%dA"%line]
-        err=res["BEST_FLUX_ERR_%dA"%line]
-        nlines_above_nsig += ((err>0)*(flux/(err+(err==0)))>2.)
-        snr += ((err>0)*(flux/(err+(err==0))))**2
-    snr=np.sqrt(snr)
+      
+    
     
     #a.errorbar(nlines_above_nsig,deltaz,errz,fmt="o")
     #a.errorbar(nlines_above_nsig[ok],deltaz[ok],errz[ok],fmt="o",c="r")
@@ -199,95 +188,42 @@ def main() :
     #a.plot(snr[ok],res["BEST_SNR"][ok],"o",c="r")
     
     #a.plot(deltaz,"o")   
-    a.set_ylabel("n lines above 1 sig.")
+    a.set_ylabel("n lines above 2 sig.")
     a.set_xlabel("Best Redshift")
     
+    a=pylab.subplot(ny,nx,ai); ai +=1 
+    a.errorbar(nlines_above_nsig,deltaz,errz,fmt="o")
+    a.errorbar(nlines_above_nsig[ok],deltaz[ok],errz[ok],fmt="o",c="r")
+    a.set_xlabel("n lines above 2 sig.")
+    a.set_ylabel("Best - True Redshift")
     
-
-    if False :
-        pylab.figure()
-        rflux=res["BEST_FLUX_3727A"]
-        
-        nx=3
-        ny=2
-        ai=1
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        pylab.plot(rflux[:],res["BEST_FLUX_3729A"][:]/rflux[:],"o",c="b")
-        pylab.plot(rflux[ok],res["BEST_FLUX_3729A"][ok]/rflux[ok],"o",c="r")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        pylab.plot(rflux[:],res["BEST_FLUX_4862A"][:]/rflux[:],"o",c="b")
-        pylab.plot(rflux[ok],res["BEST_FLUX_4862A"][ok]/rflux[ok],"o",c="r")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        pylab.plot(rflux[:],res["BEST_FLUX_4960A"][:]/rflux[:],"o",c="b")
-        pylab.plot(rflux[ok],res["BEST_FLUX_4960A"][ok]/rflux[ok],"o",c="r")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        pylab.plot(rflux[:],res["BEST_FLUX_5008A"][:]/rflux[:],"o",c="b")
-        pylab.plot(rflux[ok],res["BEST_FLUX_5008A"][ok]/rflux[ok],"o",c="r")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        pylab.plot(rflux[:],res["BEST_FLUX_6564A"][:]/rflux[:],"o",c="b")
-        pylab.plot(rflux[ok],res["BEST_FLUX_6564A"][ok]/rflux[ok],"o",c="r")
-        
-    if False :
-        pylab.figure()
-        rflux=res["BEST_FLUX_3729A"]
-        nonnull=(rflux>0)
-        nx=3
-        ny=3
-        ai=1
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(rflux[nonnull],res["BEST_FLUX_3727A"][nonnull],"o",c="b")
-        a.plot(rflux[good],res["BEST_FLUX_3729A"][good],"o",c="r")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_3727A"][nonnull]/rflux[nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_3727A"][good]/rflux[good],deltaz[good],"o",c="r")
-        a.set_xlabel("3727/3729")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_4862A"][nonnull]/rflux[nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_4862A"][good]/rflux[good],deltaz[good],"o",c="r")
-        a.set_xlabel("4862/3729")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_4960A"][nonnull]/rflux[nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_4960A"][good]/rflux[good],deltaz[good],"o",c="r")
-        a.set_xlabel("4960/3729")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_5008A"][nonnull]/rflux[nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_5008A"][good]/rflux[good],deltaz[good],"o",c="r")
-        a.set_xlabel("5008/3729")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_4960A"][nonnull]/res["BEST_FLUX_4862A"][nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_4960A"][good]/res["BEST_FLUX_4862A"][good],deltaz[good],"o",c="r")
-        a.set_xlabel("4960/4862")
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_5008A"][nonnull]/res["BEST_FLUX_4862A"][nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_5008A"][good]/res["BEST_FLUX_4862A"][good],deltaz[good],"o",c="r")
-        a.set_xlabel("5008/4862")        
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_4960A"][nonnull]/res["BEST_FLUX_4862A"][nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_4960A"][good]/res["BEST_FLUX_4862A"][good],deltaz[good],"o",c="r")
-        a.set_xlabel("4960/4862")
-        
-        a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_6564A"][nonnull]/rflux[nonnull],deltaz[nonnull],"o",c="b")
-        a.plot(res["BEST_FLUX_6564A"][good]/rflux[good],deltaz[good],"o",c="r")
-        a.set_xlabel("6564/3729")
     if True :
         pylab.figure()
-        
         nx=3
-        ny=3
+        ny=4
         ai=1
         a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_3729A"][:]/res["BEST_FLUX_4862A"][:],deltaz[:],"o",c="b")
-        a.plot(res["BEST_FLUX_3729A"][good]/res["BEST_FLUX_4862A"][good],deltaz[good],"o",c="r")
-        a.set_xlabel("3729/4862")
+        plot_ratio(a,res,deltaz,good,3729,4341)        
         a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_3729A"][:]/res["BEST_FLUX_4960A"][:],deltaz[:],"o",c="b")
-        a.plot(res["BEST_FLUX_3729A"][good]/res["BEST_FLUX_4960A"][good],deltaz[good],"o",c="r")
-        a.set_xlabel("3729/4960")
+        plot_ratio(a,res,deltaz,good,3729,4862)
         a=pylab.subplot(ny,nx,ai); ai +=1
-        a.plot(res["BEST_FLUX_3729A"][:]/res["BEST_FLUX_5008A"][:],deltaz[:],"o",c="b")
-        a.plot(res["BEST_FLUX_3729A"][good]/res["BEST_FLUX_5008A"][good],deltaz[good],"o",c="r")
-        a.set_xlabel("3729/5008")
+        plot_ratio(a,res,deltaz,good,3729,4960)
+        a=pylab.subplot(ny,nx,ai); ai +=1
+        plot_ratio(a,res,deltaz,good,3729,5008)
+        a=pylab.subplot(ny,nx,ai); ai +=1
+        plot_ratio(a,res,deltaz,good,4341,4862)
+        a=pylab.subplot(ny,nx,ai); ai +=1
+        plot_ratio(a,res,deltaz,good,4341,4960)
+        a=pylab.subplot(ny,nx,ai); ai +=1
+        plot_ratio(a,res,deltaz,good,4341,5008)
+        a=pylab.subplot(ny,nx,ai); ai +=1
+        plot_ratio(a,res,deltaz,good,4862,4960)
+        a=pylab.subplot(ny,nx,ai); ai +=1
+        plot_ratio(a,res,deltaz,good,4862,5008)
+        a=pylab.subplot(ny,nx,ai); ai +=1
+        plot_ratio(a,res,deltaz,good,4960,5008)
+        
+        
         
 
     pylab.show()
