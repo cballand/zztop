@@ -5,13 +5,18 @@ Redshift fitter for DESI
 For now, only the emission line fitter is implemented.
 Features :
 * redshift scan with multiple predefined lines fit
-* handles blended lines (OII doublet)
-* several minima tracked and refitted
-* possibility to add priors or fix line ratios
-* select among several solutions based on line ratio allowed ranges 
-* makes use of DESI resolution matrix
 * continuum removal
+* handles blended lines (OII doublet)
+* simultaneous fit of line and residual continuum
+* possibility to add priors or fix line ratios in fit
 * fit several velocity dispersion
+* several minima tracked and refitted
+* select among several solutions with small delta_chi2 based on line ratio allowed ranges 
+* makes use of DESI resolution matrix
+
+Output :
+* standard DESI redshift fit format
+* line fluxes and errors, chi2, for all the tracked solutions
 
 To do :
 * configuration file instead of long list of parameters in zzfit
@@ -29,7 +34,7 @@ For debugging :
 ```
 export DESI_LOGLEVEL=DEBUG
 
-zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --use-truth --outfile zzbest.fits 
+zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --use-truth --outfile zzbest-truth.fits 
 ```
 
 
