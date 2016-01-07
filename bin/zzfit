@@ -58,7 +58,7 @@ def main() :
     zstep=0.001 # z step of the scan
     zmin=0.3 # min redshift of the scan
     zmax=2. # max redshift of the scan
-    wave_nsig=4. # nsigma for profile fit (based on resolution and chosen velocity dispersion)
+    wave_nsig=7. # nsigma for profile fit (based on resolution and chosen velocity dispersion)
     ntrack=8 # number of solutions to track 
     remove_continuum=True # remove continuum prior to the fit of lines
     
