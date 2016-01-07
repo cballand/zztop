@@ -41,7 +41,7 @@ def main() :
     for line in lines :
         flux=res["BEST_FLUX_%dA"%line]
         err=res["BEST_FLUX_ERR_%dA"%line]
-        nlines_above_nsig += ((err>0)*(flux/(err+(err==0)))>3.)
+        nlines_above_nsig += ((err>0)*(flux/(err+(err==0)))>4.)
     
     oIIflux=(res["BEST_FLUX_3727A"]+res["BEST_FLUX_3729A"])
     oIIfluxerr=np.sqrt(res["BEST_FLUX_ERR_3727A"]**2+res["BEST_FLUX_ERR_3729A"]**2)
@@ -83,7 +83,7 @@ def main() :
     
     dchi2min=5 # 
     snrmin=5 # 
-    oIIfluxmin=0.
+    oIIfluxmin=0
     ok=np.where((dchi2>dchi2min)&(res["BEST_SNR"]>snrmin)&(oIIflux>oIIfluxmin))[0]
     #print "based on dchi2>%d and SNR>%f and oIIflux>%f :"%(dchi2min,snrmin,oIIfluxmin)
     
@@ -99,8 +99,12 @@ def main() :
         print "spec=",ok[b],"dz=",deltaz[ok[b]],"dchi2=",dchi2[ok[b]]
     
     
-    #pylab.figure()
-    #pylab.plot(truth["OIIFLUX"],"o")
+    pylab.figure()
+    pylab.errorbar(res["BEST_SNR"][ok],deltaz[ok],errz[ok],fmt="o")
+    pylab.xlabel("total S/N in lines")
+    pylab.ylabel("best - true redshifts")
+    pylab.grid()
+    
     pylab.figure()
     nx=2
     ny=1
@@ -188,13 +192,13 @@ def main() :
     #a.plot(snr[ok],res["BEST_SNR"][ok],"o",c="r")
     
     #a.plot(deltaz,"o")   
-    a.set_ylabel("n lines above 2 sig.")
+    a.set_ylabel("n lines above 3 sig.")
     a.set_xlabel("Best Redshift")
     
     a=pylab.subplot(ny,nx,ai); ai +=1 
     a.errorbar(nlines_above_nsig,deltaz,errz,fmt="o")
     a.errorbar(nlines_above_nsig[ok],deltaz[ok],errz[ok],fmt="o",c="r")
-    a.set_xlabel("n lines above 2 sig.")
+    a.set_xlabel("n lines above 3 sig.")
     a.set_ylabel("Best - True Redshift")
     
     if True :
