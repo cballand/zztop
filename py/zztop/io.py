@@ -10,7 +10,7 @@ from astropy.io import fits
 from desispec.log import get_logger
 import sys
 
-def write_zbest(filename, brickname, targetids, zztop_results, truth_table_hdu=None):
+def write_zbest(filename, brickname, zztop_results, truth_table_hdu=None):
     """Writes zztop output to ``filename``.
 
     Args:
@@ -38,11 +38,9 @@ def write_zbest(filename, brickname, targetids, zztop_results, truth_table_hdu=N
     # required zfitter fields
     
     data['BRICKNAME'] = brickname
-    data['TARGETID']  = targetids
-    
     data['Z']         = zztop_results["BEST_Z"]
     data['ZERR']      = zztop_results["BEST_Z_ERR"] # need to redo this
-
+    data['TARGETID'] = zztop_results["BEST_TARGETID"]
     # need to tune this
 
     #data['ZWARN']     = zztop_results["BEST_CHI2"]<zztop_results["SECOND_CHI2"]-9.
@@ -57,6 +55,7 @@ def write_zbest(filename, brickname, targetids, zztop_results, truth_table_hdu=N
 
     hdus = fits.HDUList()
     hdus.append(fits.BinTableHDU(data, name='ZBEST', uint=True))
+    
     if truth_table_hdu is not None :
         hdus.append(truth_table_hdu)
     

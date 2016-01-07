@@ -62,6 +62,10 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
     # do it per group to account for overlapping lines
     for group_index in groups :
         lines_in_group=groups[group_index]
+        # to test if line is included:
+        tl1=np.min(redshifted_lines[lines_in_group]-1*redshifted_sigmas[lines_in_group])
+        tl2=np.min(redshifted_lines[lines_in_group]+1*redshifted_sigmas[lines_in_group])
+        # actual fit range (larger because we want to fit the continuum at the same time)
         l1=np.min(redshifted_lines[lines_in_group]-wave_nsig*redshifted_sigmas[lines_in_group])
         l2=np.max(redshifted_lines[lines_in_group]+wave_nsig*redshifted_sigmas[lines_in_group])
         
@@ -69,10 +73,13 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
         nlines_in_group=lines_in_group.size
                     
         for frame_index in range(nframes) :
-            frame_wave = wave[frame_index]
-            frame_ivar = ivar[frame_index]
-            nw=frame_wave.size
-            # wavelength that matter :
+            
+            frame_wave=wave[frame_index]
+            frame_ivar=ivar[frame_index]
+            # test :
+            if np.sum((frame_wave>=tl1)&(frame_wave<=tl2)&(frame_ivar>0)) == 0 :
+                continue
+            # wavelength that matter :            
             wave_index=np.where((frame_wave>=l1)&(frame_wave<=l2)&(frame_ivar>0))[0]
             if wave_index.size == 0 :
                 continue
@@ -392,7 +399,7 @@ def zz_subtract_continuum(wave,flux,ivar,wave_step=150.) :
         subtracted_flux.append(flux[index]-np.interp(wave[index],allwave,continuum))
     return subtracted_flux
             
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,remove_continuum=True,recursive=True) :
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,remove_continuum=True,recursive=True,targetid=0) :
 
     """
     args :
@@ -614,7 +621,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,lin
             log.debug("for rank = %d zmin = %f zmax = %f zstep = %f"%(rank,zmin,zmax,zstep))
             res = zz_line_scan(wave,flux_to_fit,ivar,resolution,lines,vdisps_fast=vdisps_improved,vdisps_improved=None,
                                line_ratio_priors=line_ratio_priors,fixed_line_ratio=fixed_line_ratio,
-                               zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1,remove_continuum=False)
+                               zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1,remove_continuum=False,targetid=targetid)
             best_results.append(res)
             
         # now that we have finished improving the fits,
@@ -682,6 +689,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,lin
     res["CHI2PDF"]=best_chi2s[0]/ndf
     res["SNR"]=snr
     res["VDISP"]=best_vdisp
+    res["TARGETID"]=targetid
     
     for line_index in range(lines.size) :
         res["FLUX_%dA"%lines[line_index]]=best_z_line_amplitudes[line_index]
