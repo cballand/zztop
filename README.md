@@ -13,6 +13,7 @@ Features :
 * several minima tracked and refitted
 * select among several solutions with small delta_chi2 based on line ratio allowed ranges 
 * makes use of DESI resolution matrix
+* with multiprocessing
 
 Output :
 * standard DESI redshift fit format
@@ -26,7 +27,7 @@ One example to test this :
 
 ```
 quickbrick -b elg --objtype=elg -n 100
-zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --outfile zzbest.fits
+zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --outfile zzbest.fits --ncpu 4
 plot_zzbest.py -i zzbest.fits
 ```
 
@@ -34,7 +35,7 @@ For debugging :
 ```
 export DESI_LOGLEVEL=DEBUG
 
-zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --use-truth --outfile zzbest-truth.fits 
+zzfit --b brick-b-elg.fits --r brick-r-elg.fits --z brick-z-elg.fits --use-truth --outfile zzbest-truth.fits --ncpu 4
 ```
 
 
