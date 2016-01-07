@@ -20,6 +20,7 @@ Output :
 * line fluxes and errors, chi2, for all the tracked solutions
 
 To do :
+* actual fit of the velocity dispersion for the best solution
 * configuration file instead of long list of parameters in zzfit
 * add other types of objects
 
