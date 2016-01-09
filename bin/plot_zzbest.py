@@ -87,8 +87,10 @@ def main() :
     #ok=np.where((dchi2>dchi2min)&(res["BEST_SNR"]>snrmin)&(oIIflux>oIIfluxmin))[0]
     #print "based on dchi2>%d and SNR>%f and oIIflux>%f :"%(dchi2min,snrmin,oIIfluxmin)
     
-    ok=np.where(((nlines_above_nsig>=2)|(oIInsig>5))&(snr>snrmin))[0]
-    print "based on nlines>=2 with 3sig, or OII SNR>5"
+    #ok=np.where(((nlines_above_nsig>=2)|(oIInsig>5))&(snr>snrmin))[0]
+    #print "based on nlines>=2 with 3sig, or OII SNR>5"
+    ok=np.where(res["ZWARN"]==0)[0]
+    print "based on ZWARN"
     print "==========================="
     print "efficiency tot = %d/%d = %f"%(ok.size,n,ok.size/float(n))
     bad=np.where(np.abs(deltaz[ok])>0.005)[0]

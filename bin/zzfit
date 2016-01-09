@@ -155,6 +155,8 @@ def main() :
     for key in results[0].keys() :
         if key=="TARGETID" :
             dtype.append( (key, np.int64) ) 
+        elif key=="ZWARN" :
+            dtype.append( (key, np.int64) ) 
         else :
             dtype.append( (key, np.float32) )
     formatted_results = np.empty(len(results), dtype=dtype)

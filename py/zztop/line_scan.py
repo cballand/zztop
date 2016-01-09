@@ -567,8 +567,37 @@ def zz_subtract_continuum(wave,flux,ivar,wave_step=150.) :
     for index in range(len(wave)) :
         subtracted_flux.append(flux[index]-np.interp(wave[index],allwave,continuum))
     return subtracted_flux
-            
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_range=2000.,ntrack=3,remove_continuum=True,recursive=True,targetid=0,vdisp_min=1.,vdisp_max=500.) :
+        
+def zz_set_warning(results,lines,zwarn_min_dchi2=None,zwarn_min_total_snr=None,zwarn_min_number_of_significant_lines=None,zwarn_min_line_snr=None,zwarn_min_oII_snr=None) :
+    ok=True
+    if zwarn_min_dchi2 is not None :
+        dchi2=results["SECOND_CHI2"]-results["BEST_CHI2"]
+        if abs(dchi2)<zwarn_min_dchi2 :
+            ok=False
+    if zwarn_min_total_snr is not None :
+        if results["BEST_SNR"]<zwarn_min_total_snr :
+            ok=False
+    if zwarn_min_number_of_significant_lines is not None and zwarn_min_line_snr is not None :
+        nlines=0
+        for line in lines :
+            err=results["BEST_FLUX_ERR_%dA"%(int(line))]
+            flux=results["BEST_FLUX_%dA"%(int(line))]
+            if err>0 and flux/err>zwarn_min_line_snr :
+                nlines += 1
+        if nlines < zwarn_min_number_of_significant_lines :
+            ok=False
+    
+    if zwarn_min_oII_snr is not None :
+        oIIflux=results["BEST_FLUX_3727A"]+results["BEST_FLUX_3729A"]
+        oIIerr=math.sqrt(results["BEST_FLUX_ERR_3727A"]**2+results["BEST_FLUX_ERR_3729A"]**2)
+        if oIIerr>0 and oIIflux/oIIerr>zwarn_min_oII_snr :
+            ok=True # this is a OR test, we think it's ok if above this
+    
+    # can do better with bits ...
+    zwarn = 0 + int(ok==False)
+    return zwarn
+
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_range=2000.,ntrack=3,remove_continuum=True,recursive=True,targetid=0,vdisp_min=1.,vdisp_max=500.,zwarn_min_dchi2=None,zwarn_min_total_snr=None,zwarn_min_number_of_significant_lines=None,zwarn_min_line_snr=None,zwarn_min_oII_snr=None) :
 
     """
     args :
@@ -866,7 +895,13 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
                 final_results[k]=best_results[i][k]
             else :
                 final_results["%s_%s"%(labels[i],k)]=best_results[i][k]
+
+    # add zwarning
+    final_results["ZWARN"]=zz_set_warning(final_results,lines,zwarn_min_dchi2=zwarn_min_dchi2,zwarn_min_total_snr=zwarn_min_total_snr,
+                                           zwarn_min_number_of_significant_lines=zwarn_min_number_of_significant_lines,
+                                           zwarn_min_line_snr=zwarn_min_line_snr,zwarn_min_oII_snr=zwarn_min_oII_snr)
     
+
     end_time = time.clock( )
     log.info("best z=%f+-%f chi2/ndf=%3.2f dchi2=%3.1f time=%f sec"%(final_results["BEST_Z"],final_results["BEST_Z_ERR"],final_results["BEST_CHI2PDF"],final_results["SECOND_CHI2"]-final_results["BEST_CHI2"],end_time-start_time))
     return final_results

@@ -28,7 +28,12 @@
 [4,5,2.161887 , 7.335445],
 [4,6,0.716065 , 2.478093],
 [5,6,0.309069 , 0.345880]
-]
+],
+"zwarn_min_dchi2" : 4.0,
+"zwarn_min_total_snr" : 3.0,
+"zwarn_min_number_of_significant_lines" : 2,
+"zwarn_min_line_snr" : 3.0 ,
+"zwarn_min_oII_snr" : 5.0
 },
 
 "OTHER":{}
