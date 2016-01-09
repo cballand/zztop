@@ -3,6 +3,7 @@
 Redshift fitter for DESI
 
 For now, only the emission line fitter is implemented.
+
 Features :
 * redshift scan with multiple predefined lines fit
 * continuum removal
@@ -14,7 +15,8 @@ Features :
 * select among several solutions with small delta_chi2 based on line ratio allowed ranges 
 * makes use of DESI resolution matrix
 * with multiprocessing
-* json configuration file with all params, see [config](data/zztop.json)
+* json configuration file with all params, see [default config file](data/zztop.json)
+
 Output :
 * standard DESI redshift fit format
 * line fluxes and errors, chi2, for all the tracked solutions
