@@ -23,7 +23,6 @@ def write_zbest(filename, brickname, zztop_results, truth_table_hdu=None):
     """
     dtype = [
         ('BRICKNAME', 'S8'),
-        ('TARGETID',  np.int64),
         ('Z',         np.float32),
         ('ZERR',      np.float32),
         ('ZWARN',     np.int64),
@@ -40,9 +39,9 @@ def write_zbest(filename, brickname, zztop_results, truth_table_hdu=None):
     data['BRICKNAME'] = brickname
     data['Z']         = zztop_results["BEST_Z"]
     data['ZERR']      = zztop_results["BEST_Z_ERR"] # need to redo this
-    data['TARGETID'] = zztop_results["BEST_TARGETID"]
-    # need to tune this
+    # target ID is already in zztop results
 
+    # need to tune zwarn
     #data['ZWARN']     = zztop_results["BEST_CHI2"]<zztop_results["SECOND_CHI2"]-9.
     data['ZWARN']     = zztop_results["BEST_SNR"]<6 # this is giving 81% eff, 1% cata. failure
     
@@ -56,6 +55,8 @@ def write_zbest(filename, brickname, zztop_results, truth_table_hdu=None):
     hdus = fits.HDUList()
     hdus.append(fits.BinTableHDU(data, name='ZBEST', uint=True))
     
+    # add truth table if exists for convenience
+    # in development
     if truth_table_hdu is not None :
         hdus.append(truth_table_hdu)
     

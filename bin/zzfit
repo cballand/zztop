@@ -10,9 +10,12 @@ import numpy as np
 import sys
 import math
 from astropy.io import fits
+import zztop
 from zztop.line_scan import zz_line_scan
 import zztop.io as io
 import multiprocessing
+import json
+import os.path
 
 def _func(arg) :
     return zz_line_scan(**arg)
@@ -37,6 +40,10 @@ def main() :
                         help = 'use true flux and true vdisp for debugging if exists in bricks')
     parser.add_argument('--ncpu', type = int, default = 1, required=False,
                         help = 'multiprocessing')
+    parser.add_argument('--conf', type = str, default = None, required=False,
+                        help = 'configuration file')
+    parser.add_argument('--type', type = str, default = "ELG", required=False,
+                        help = 'configuration file')
     
     
     args = parser.parse_args()
@@ -54,57 +61,22 @@ def main() :
     elg_spectra=np.where(b_brick.hdu_list[7].data["OBJTYPE"][args.first:]=="ELG")[0]+args.first
     
     #########################################
-    ## fit parameters
+    ## fit parameters are in config file
     #########################################
-    lines=np.array([3727.092,3729.875,4102.892,4341.684,4862.708,4960.295,5008.240,6564.603])#,3890.151,
-    vdisps_fast=np.array([100]) # test all of these velocity dispersions, same for all lines , in km/s , for the first redshift scan
-    #vdisps_improved=np.array([50,60,70,80,90,100,110,120,130,140,150]) # same for the second refined redshift scan
-    vdisps_improved=np.array([50,100,150]) # same for the second refined redshift scan
     
-    zstep=0.001 # z step of the scan
-    zmin=0.3 # min redshift of the scan
-    zmax=2. # max redshift of the scan
-    wave_nsig=7. # nsigma for profile fit (based on resolution and chosen velocity dispersion)
-    ntrack=8 # number of solutions to track 
-    remove_continuum=True # remove continuum prior to the fit of lines
-    
-    
-    
-   
-    # line ratio priors are included in the chi2 fit, it makes sense only for doublets
-    # line_ratio_priors[INDEX_OF_LINE_2]=[INDEX_OF_LINE_1,min(LINE_2/LINE_1),max(LINE_2/LINE_1),conserve_sum_of_fluxes]
-    line_ratio_priors=None
-    
-    # force line ratios in the fit
-    # fixed_line_ratio[INDEX_OF_LINE_2]=[INDEX_OF_LINE_1,flux(LINE_2/LINE_1)]
-    #fixed_line_ratio=None
-    fixed_line_ratio={}
-    fixed_line_ratio[0]=[1,0.7] # fixed 3727/3729 line ratio 
-    
-    # line ratio constraints are used to rank best fits among the few solutions that are saved based on spectrum fit chi2
-    # line_ratio_constraints[INDEX_OF_LINE_2]=[INDEX_OF_LINE_1,min(LINE_2/LINE_1),max(LINE_2/LINE_1)]
-    line_ratio_constraints=None
-    if True :     
-        line_ratio_constraints=[] 
-        line_ratio_constraints.append([1,2,3. , 10000]) # constraint on 3729/4102 line ratio
-        line_ratio_constraints.append([1,3,1.652370 , 6.822389]) # constraint on 3729/4341 line ratio 
-        line_ratio_constraints.append([1,4,0.758316 , 2.720020]) # constraint on 3729/4862 line ratio 
-        line_ratio_constraints.append([1,5,2.651839 , 8.835278]) # constraint on 3729/4960 line ratio 
-        line_ratio_constraints.append([1,6,0.917218 , 3.023933]) # constraint on 3729/5008 line ratio 
-        line_ratio_constraints.append([2,3,0.092857 , 0.575112]) # constraint on  line ratio 
-        line_ratio_constraints.append([2,4,0.027251 , 0.252942]) # constraint on  line ratio 
-        line_ratio_constraints.append([2,5,0.132053 , 1.816861]) # constraint on  line ratio 
-        line_ratio_constraints.append([2,6,0.040813 , 0.613780]) # constraint on  line ratio 
-        line_ratio_constraints.append([3,4,0.293469 , 0.475378]) # constraint on  line ratio 
-        line_ratio_constraints.append([3,5,0.859397 , 3.350700]) # constraint on  line ratio 
-        line_ratio_constraints.append([3,6,0.286579 , 1.131949]) # constraint on  line ratio 
-        line_ratio_constraints.append([4,5,2.161887 , 7.335445]) # constraint on  line ratio 
-        line_ratio_constraints.append([4,6,0.716065 , 2.478093]) # constraint on  line ratio 
-        line_ratio_constraints.append([5,6,0.309069 , 0.345880]) # constraint on  line ratio 
-        # don't have 6564 in the training sample yet 
-    #########################################
-
-    
+    if args.conf is None :
+        args.conf = "%s/data/zztop.json"%(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(zztop.__file__)))))
+        log.info("will use default config file %s"%args.conf)
+        
+    try :
+        file=open(args.conf)
+        data = json.load(file)
+        parameters=data["zztop"][args.type]
+    except :
+        log.error("error when parsing json file:")
+        print sys.exc_info()
+        sys.exit(12)
+        
     results=None
 
     truth_table_hdu=None
@@ -133,33 +105,32 @@ def main() :
 
         targetid=targetids[s]
         flux=[b_brick.hdu_list[0].data[spec],r_brick.hdu_list[0].data[spec],z_brick.hdu_list[0].data[spec]]
-        
-        # for tests
-        if args.use_truth :
-            flux=[b_brick.hdu_list["_TRUEFLUX"].data[spec],r_brick.hdu_list["_TRUEFLUX"].data[spec],z_brick.hdu_list["_TRUEFLUX"].data[spec]]
-            vdisps_fast=[b_brick.hdu_list["_TRUTH"].data["VDISP"][spec]]
-            vdisps_improved=[b_brick.hdu_list["_TRUTH"].data["VDISP"][spec]]
-            zmin=b_brick.hdu_list["_TRUTH"].data["TRUEZ"][spec]-0.05
-            zmax=b_brick.hdu_list["_TRUTH"].data["TRUEZ"][spec]+0.05
-            ntrack=3
-            fixed_line_ratio[0]=[1,b_brick.hdu_list["_TRUTH"].data["OIIDOUBLET"][spec]]
-            #fixed_line_ratio=None
-            line_ratio_constraints=None
-            line_ratio_priors=None
-        
         ivar=[b_brick.hdu_list[1].data[spec],r_brick.hdu_list[1].data[spec],z_brick.hdu_list[1].data[spec]]
         wave=[b_brick.hdu_list[2].data,r_brick.hdu_list[2].data,z_brick.hdu_list[2].data]    
         resolution=[Resolution(native_endian(b_brick.hdu_list[3].data[spec])),Resolution(native_endian(r_brick.hdu_list[3].data[spec])),Resolution(native_endian(z_brick.hdu_list[3].data[spec]))]
-
-        # same all arguments in a list for multiprocessing 
-        func_args.append( {"targetid":targetid, "wave":wave,
-                           "flux":flux,"ivar":ivar,"resolution":resolution,
-                           "lines":lines,"vdisps_fast":vdisps_fast,"vdisps_improved":vdisps_improved,
-                           "line_ratio_priors":line_ratio_priors,"line_ratio_constraints":line_ratio_constraints,
-                           "fixed_line_ratio":fixed_line_ratio,"zstep":zstep,"zmin":zmin,"zmax":zmax,
-                           "wave_nsig":wave_nsig,"ntrack":ntrack,
-                           "remove_continuum":remove_continuum,"recursive":True} )
         
+        arguments={"targetid":targetid, "wave":wave,
+                           "flux":flux,"ivar":ivar,"resolution":resolution}
+        
+        # add fit parameters found in configuration file
+        for k in parameters :
+            arguments[k]=parameters[k]
+                
+        
+        # for tests
+        if args.use_truth :
+            arguments["flux"]=[b_brick.hdu_list["_TRUEFLUX"].data[spec],r_brick.hdu_list["_TRUEFLUX"].data[spec],z_brick.hdu_list["_TRUEFLUX"].data[spec]]
+            arguments["vdisps"]=[b_brick.hdu_list["_TRUTH"].data["VDISP"][spec]]
+            arguments["zmin"]=b_brick.hdu_list["_TRUTH"].data["TRUEZ"][spec]-0.05
+            arguments["zmax"]=b_brick.hdu_list["_TRUTH"].data["TRUEZ"][spec]+0.05
+            arguments["ntrack"]=3
+            arguments["fixed_line_ratio"]=[[0,1,b_brick.hdu_list["_TRUTH"].data["OIIDOUBLET"][spec]]]            
+            if arguments.has_key("line_ratio_constraints") : arguments.pop("line_ratio_constraints") 
+            if arguments.has_key("line_ratio_priors") : arguments.pop("line_ratio_priors") 
+        
+        # save all arguments for each spectrum in a list for multiprocessing 
+        func_args.append( arguments )
+    
     results=[]
     
     if args.ncpu==1 : # simple loop
@@ -178,30 +149,20 @@ def main() :
         pool = multiprocessing.Pool(args.ncpu)
         results =  pool.map(_func, func_args)
         
-        
     
-    
-     
-
-    # reformat results matching initial target ids
+    # reformat results matching initial target ids (multiprocessing shuffles the results)
     dtype = list()
     for key in results[0].keys() :
         if key=="TARGETID" :
             dtype.append( (key, np.int64) ) 
         else :
-            dtype.append( (key, np.float32) ) # need to change this
+            dtype.append( (key, np.float32) )
     formatted_results = np.empty(len(results), dtype=dtype)
-    
-    
-    
+        
     for result in results :
-        targetid=result["BEST_TARGETID"]
-        i=np.where(targetids==targetid)[0][0]
+        i=np.where(targetids==result["TARGETID"])[0][0]
         for key in result.keys() :
             formatted_results[key][i]=result[key]
-    
-    
-    
     
     io.write_zbest(args.outfile,brickname,formatted_results,truth_table_hdu)
     log.info("wrote %s"%args.outfile)

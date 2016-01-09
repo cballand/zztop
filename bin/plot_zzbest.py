@@ -7,12 +7,12 @@ import numpy as np
 from math import *
 
 def plot_ratio(a,res,deltaz,good,line1,line2) :
-    ok=np.where(res["BEST_FLUX_%dA"%line2]>0)
-    x=res["BEST_FLUX_%dA"%line1][ok]/res["BEST_FLUX_%dA"%line2][ok]
-    a.plot(x,deltaz[ok],"o",c="b")
-    ok=np.where(res["BEST_FLUX_%dA"%line2][good]>0)
-    x=res["BEST_FLUX_%dA"%line1][good[ok]]/res["BEST_FLUX_%dA"%line2][good[ok]]
-    a.plot(x,deltaz[ok],"o",c="r")
+    ok2=np.where(res["BEST_FLUX_%dA"%line2]>0)
+    x=res["BEST_FLUX_%dA"%line1][ok2]/res["BEST_FLUX_%dA"%line2][ok2]
+    a.plot(x,deltaz[ok2],"o",c="b")
+    ok2=np.where(res["BEST_FLUX_%dA"%line2][good]>0)
+    x=res["BEST_FLUX_%dA"%line1][good[ok2]]/res["BEST_FLUX_%dA"%line2][good[ok2]]
+    a.plot(x,deltaz[good[ok2]],"o",c="r")
     print "min max %d/%d = %f , %f"%( line1,line2,np.min(x),np.max(x) )
     a.set_xlabel("%d/%d"%(line1,line2))
     
@@ -41,7 +41,7 @@ def main() :
     for line in lines :
         flux=res["BEST_FLUX_%dA"%line]
         err=res["BEST_FLUX_ERR_%dA"%line]
-        nlines_above_nsig += ((err>0)*(flux/(err+(err==0)))>4.)
+        nlines_above_nsig += ((err>0)*(flux/(err+(err==0)))>3.)
     
     oIIflux=(res["BEST_FLUX_3727A"]+res["BEST_FLUX_3729A"])
     oIIfluxerr=np.sqrt(res["BEST_FLUX_ERR_3727A"]**2+res["BEST_FLUX_ERR_3729A"]**2)
@@ -71,7 +71,7 @@ def main() :
     errz=errz
     truez=truez
     dchi2=res["SECOND_CHI2"]-res["BEST_CHI2"]
-    
+    snr=res["BEST_SNR"]
 
     good=np.where(np.abs(deltaz)<0.005)[0]
     print "based on |dz|<0.005 (after default choice of best solution):"
@@ -84,10 +84,10 @@ def main() :
     dchi2min=5 # 
     snrmin=5 # 
     oIIfluxmin=0
-    ok=np.where((dchi2>dchi2min)&(res["BEST_SNR"]>snrmin)&(oIIflux>oIIfluxmin))[0]
+    #ok=np.where((dchi2>dchi2min)&(res["BEST_SNR"]>snrmin)&(oIIflux>oIIfluxmin))[0]
     #print "based on dchi2>%d and SNR>%f and oIIflux>%f :"%(dchi2min,snrmin,oIIfluxmin)
     
-    ok=np.where((nlines_above_nsig>=2)|(oIInsig>5))[0]
+    ok=np.where(((nlines_above_nsig>=2)|(oIInsig>5))&(snr>snrmin))[0]
     print "based on nlines>=2 with 3sig, or OII SNR>5"
     print "==========================="
     print "efficiency tot = %d/%d = %f"%(ok.size,n,ok.size/float(n))
@@ -110,8 +110,11 @@ def main() :
     ny=1
     ai=1
     a=pylab.subplot(ny,nx,ai); ai +=1
-    a.plot(truth["VDISP"],res["BEST_VDISP"],"o",c="b")
-    a.plot(truth["VDISP"][good],res["BEST_VDISP"][good],"o",c="r")
+    #a.plot(truth["VDISP"],res["BEST_VDISP"],"o",c="b")
+    #a.plot(truth["VDISP"][good],res["BEST_VDISP"][good],"o",c="r")
+    
+    a.errorbar(truth["VDISP"],res["BEST_VDISP"],res["BEST_VDISP_ERR"],fmt="o",color="b")
+    a.errorbar(truth["VDISP"][good],res["BEST_VDISP"][good],res["BEST_VDISP_ERR"][good],fmt="o",color="r")
     a.plot(truth["VDISP"],truth["VDISP"],"-",c="gray")
     a.set_xlabel("True vdisp")
     a.set_ylabel("Best vdisp")
@@ -152,8 +155,10 @@ def main() :
     a.set_ylabel("Best - True Redshift")
 
     a=pylab.subplot(ny,nx,ai); ai +=1
-    a.errorbar(truth["VDISP"],deltaz,errz,fmt="o")   
-    a.errorbar(truth["VDISP"][ok],deltaz[ok],errz[ok],fmt="o",c="r")   
+    #a.errorbar(truth["VDISP"],deltaz,errz,fmt="o")   
+    #a.errorbar(truth["VDISP"][ok],deltaz[ok],errz[ok],fmt="o",c="r")   
+    a.errorbar(res["BEST_VDISP"],deltaz,errz,fmt="o")   
+    a.errorbar(res["BEST_VDISP"][ok],deltaz[ok],errz[ok],fmt="o",c="r")   
     a.set_xlabel("vdisp (km/s)")
     a.set_ylabel("Best - True Redshift")
     

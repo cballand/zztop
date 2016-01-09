@@ -35,7 +35,8 @@ def find_groups(lines,restframe_sigmas,resolution_sigma=1.,nsig=5.) :
     
     return groups
 
-def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_nsig,x,gx,groups,fixed_line_ratio=None) :
+
+def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio=None,z_for_range=None) :
     """
     internal routine : fit line amplitudes and return delta chi2 with respect to zero amplitude
     """
@@ -48,7 +49,7 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
     
     redshifted_lines=lines*(1+z)
     redshifted_sigmas=lines*(vdisp/2.9970e5)*(1+z) # this is the sigmas of all lines
-    
+    wave_hw = wave_range/2.
     nframes=len(flux)
     
     # compute profiles, and fill A and B matrices
@@ -62,13 +63,21 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
     # do it per group to account for overlapping lines
     for group_index in groups :
         lines_in_group=groups[group_index]
-        # to test if line is included:
-        tl1=np.min(redshifted_lines[lines_in_group]-1*redshifted_sigmas[lines_in_group])
-        tl2=np.min(redshifted_lines[lines_in_group]+1*redshifted_sigmas[lines_in_group])
-        # actual fit range (larger because we want to fit the continuum at the same time)
-        l1=np.min(redshifted_lines[lines_in_group]-wave_nsig*redshifted_sigmas[lines_in_group])
-        l2=np.max(redshifted_lines[lines_in_group]+wave_nsig*redshifted_sigmas[lines_in_group])
-        
+        if z_for_range is None :
+            # to test if line is included:
+            tl1=np.min(redshifted_lines[lines_in_group]-1*redshifted_sigmas[lines_in_group])
+            tl2=np.min(redshifted_lines[lines_in_group]+1*redshifted_sigmas[lines_in_group])
+            # actual fit range (larger because we want to fit the continuum at the same time)
+            l1=np.min(redshifted_lines[lines_in_group]-wave_hw)
+            l2=np.max(redshifted_lines[lines_in_group]+wave_hw)
+        else : # needed in a refined fit to fix the wave range whatever the z
+            # to test if line is included:
+            tl1=np.min(redshifted_lines[lines_in_group]*(1+z_for_range)/(1+z)-1*redshifted_sigmas[lines_in_group])
+            tl2=np.min(redshifted_lines[lines_in_group]*(1+z_for_range)/(1+z)+1*redshifted_sigmas[lines_in_group])
+            # actual fit range (larger because we want to fit the continuum at the same time)
+            l1=np.min(redshifted_lines[lines_in_group]*(1+z_for_range)/(1+z)-wave_hw)
+            l2=np.max(redshifted_lines[lines_in_group]*(1+z_for_range)/(1+z)+wave_hw)
+            
         
         nlines_in_group=lines_in_group.size
                     
@@ -121,9 +130,10 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
         
     Atofit=A.copy()            
     if fixed_line_ratio is not None :
-        for i in fixed_line_ratio :
-            j=fixed_line_ratio[i][0]
-            ratio=fixed_line_ratio[i][1]
+        for fixed in fixed_line_ratio :
+            i=fixed[0]
+            j=fixed[1]
+            ratio=fixed[2]
             
             # f0=ratio*f1
             # chi2 = (f0-ratio*f1)**2
@@ -177,12 +187,12 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
     
     # apply priors (outside of loop on groups)
     if line_ratio_priors is not None :
-        for line_index in line_ratio_priors :
-            
-            other_line_index = int(line_ratio_priors[line_index][0])
-            min_ratio        = float(line_ratio_priors[line_index][1])
-            max_ratio        = float(line_ratio_priors[line_index][2])
-            conserve_flux    = line_ratio_priors[line_index][3]
+        for prior in line_ratio_priors :
+            line_index       = int(prior[0])
+            other_line_index = int(prior[1])
+            min_ratio        = float(prior[2])
+            max_ratio        = float(prior[3])
+            conserve_flux    = prior[4]
             
             # first ignore if one of the lines is not measured
             if line_amplitudes_ivar[line_index]==0 or line_amplitudes_ivar[other_line_index]==0 :
@@ -254,6 +264,7 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_n
     # return
     return dchi2,line_amplitudes,line_amplitudes_ivar
 
+
 class SolutionTracker :
     
     def __init__(self) :
@@ -262,8 +273,13 @@ class SolutionTracker :
         
     def find_best(self,ntrack=3,min_delta_z=0.002) :
         # first convert into np arrays
+        
         zscan = np.array(self.zscan)
         chi2scan = np.array(self.chi2scan)
+        ii=np.argsort(zscan)
+        zscan=zscan[ii]
+        chi2scan=chi2scan[ii]
+        
         nfound=0        
         zz=[]
         ze=[]
@@ -281,17 +297,21 @@ class SolutionTracker :
             nfound += 1
             
             # estimate error
-            dz=0.
+            dz=np.gradient(zscan)[ibest]
+            
             # >z side            
             for i in range(ibest+1,zscan.size) :
                 if chi2scan[i]>chi2best+1 :
+                    z=np.interp(chi2best+1,chi2scan[ibest:i+1],zscan[ibest:i+1])
+                    dz=abs(z-zbest)
                     break                 
-                dz=abs(zscan[i]-zbest)
             # <z side            
             for i in range(ibest-1,-1,-1) :
                 if chi2scan[i]>chi2best+1 :
+                    z=np.interp(chi2best+1,chi2scan[i:ibest+1],zscan[i:ibest+1])
+                    dz=max(abs(z-zbest),dz)
                     break                 
-                dz=max(abs(zbest-zscan[i]),dz)
+            
             ze.append(dz) # can be null
             
 
@@ -326,6 +346,155 @@ class SolutionTracker :
     def add(self,z,chi2) :      
         self.zscan.append(z)
         self.chi2scan.append(chi2)
+"""
+def zz_fit_param(xmin,xmax,args,chi2_func) :
+    m=(xmin+xmax)/2.
+    d=(xmax-xmin)
+    x=np.array([xmin,m-d/4,m,m+d/4,xmax])
+    c=np.zeros((5)) 
+    a=np.zeros((5,lines.size)) 
+    w=np.zeros((5,lines.size)) 
+    tracker=SolutionTracker(min_delta_z=0.)
+    for i in range(5) :
+        #c[i],a[i],w[i]=zz_line_fit(wave,flux,ivar,resolution,lines,v[i],line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio)
+        c[i],a[i],w[i]=chi2_func(x[i],args)
+        tracker.add(x[i],c[i])
+    tx=np.zeros((5))
+    tc=np.zeros((5))
+    ta=np.zeros((5,lines.size))
+    tw=np.zeros((5,lines.size))
+    
+    for loop in range(100) :
+        i=np.argmin(c)
+        if i==0 or i==4 or np.min(np.abs(c[c!=c[i]]-c[i]))<0.1 :
+            junk,err,junk = tracker.find_best(ntrack=1,min_delta_z=0)
+            return c[i],a[i],w[i],x[i],err[0]
+        tx[0]=x[i-1]
+        tx[1]=(x[i-1]+x[i])/2.
+        tx[2]=x[i]
+        tx[3]=(x[i+1]+x[i])/2.
+        tx[4]=x[i+1]
+        tc[0]=c[i-1]
+        tc[2]=c[i]
+        tc[4]=c[i+1]
+        ta[0]=a[i-1]
+        ta[2]=a[i]
+        ta[4]=a[i+1]
+        tw[0]=w[i-1]
+        tw[2]=w[i]
+        tw[4]=w[i+1]
+        tc[1],ta[1],tw[1]=chi2_func(tx[1],args)
+        tc[3],ta[3],tw[3]=chi2_func(tx[3],args)
+        tracker.add(tx[1],tc[1])
+        tracker.add(tx[3],tc[3])        
+        x=tx.copy()
+        c=tc.copy()
+        a=ta.copy()
+        w=tw.copy()
+    print "error"
+    return c[0],a[0],w[0],x[0],d
+
+def vdisp_chi2_func(vdisp,args) :
+    return zz_line_fit(wave,flux,ivar,resolution,lines,v[i],line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio)
+"""
+def zz_fit_vdisp(wave,flux,ivar,resolution,lines,vdisp_min,vdisp_max,line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio=None) :
+    m=(vdisp_min+vdisp_max)/2.
+    d=(vdisp_max-vdisp_min)
+    v=np.array([vdisp_min,m-d/4,m,m+d/4,vdisp_max])
+    c=np.zeros((5)) 
+    a=np.zeros((5,lines.size)) 
+    w=np.zeros((5,lines.size)) 
+    tracker=SolutionTracker()
+    for i in range(5) :
+        c[i],a[i],w[i]=zz_line_fit(wave,flux,ivar,resolution,lines,v[i],line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio)
+        tracker.add(v[i],c[i])
+    tv=np.zeros((5))
+    tc=np.zeros((5))
+    ta=np.zeros((5,lines.size))
+    tw=np.zeros((5,lines.size))
+    
+    for loop in range(100) :
+        i=np.argmin(c)
+        if i==0 or i==4 or np.min(np.abs(c[c!=c[i]]-c[i]))<0.1 :
+            junk,err,junk = tracker.find_best(ntrack=1,min_delta_z=0)
+            return c[i],a[i],w[i],v[i],err[0]
+        tv[0]=v[i-1]
+        tv[1]=(v[i-1]+v[i])/2.
+        tv[2]=v[i]
+        tv[3]=(v[i+1]+v[i])/2.
+        tv[4]=v[i+1]
+        tc[0]=c[i-1]
+        tc[2]=c[i]
+        tc[4]=c[i+1]
+        ta[0]=a[i-1]
+        ta[2]=a[i]
+        ta[4]=a[i+1]
+        tw[0]=w[i-1]
+        tw[2]=w[i]
+        tw[4]=w[i+1]
+        tc[1],ta[1],tw[1]=zz_line_fit(wave,flux,ivar,resolution,lines,tv[1],line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio)
+        tc[3],ta[3],tw[3]=zz_line_fit(wave,flux,ivar,resolution,lines,tv[3],line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio)
+        tracker.add(tv[1],tc[1])
+        tracker.add(tv[3],tc[3])
+        
+        v=tv.copy()
+        c=tc.copy()
+        a=ta.copy()
+        w=tw.copy()
+    print "error in zz_fit_vdisp"
+    return c[0],a[0],w[0],v[0],1000.
+
+def zz_fit_z(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z_min,z_max,wave_range,x,gx,groups,fixed_line_ratio=None) :
+    m=(z_min+z_max)/2.
+    d=(z_max-z_min)
+    z=np.array([z_min,m-d/4,m,m+d/4,z_max])
+    c=np.zeros((5)) 
+    a=np.zeros((5,lines.size)) 
+    w=np.zeros((5,lines.size)) 
+    am=a[2].copy() # keep if thing go wrong
+    wm=w[2].copy() # keep if thing go wrong
+    
+    tracker=SolutionTracker()
+    for i in range(5) :
+        c[i],a[i],w[i]=zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z[i],wave_range,x,gx,groups,fixed_line_ratio,z_for_range=m)
+        tracker.add(z[i],c[i])
+    
+    tz=np.zeros((5))
+    tc=np.zeros((5))
+    ta=np.zeros((5,lines.size))
+    tw=np.zeros((5,lines.size))
+    
+    for loop in range(100) :
+        i=np.argmin(c)
+        if i==0 or i==4 or np.min(np.abs(c[c!=c[i]]-c[i]))<0.1 :
+            junk,err,junk = tracker.find_best(ntrack=1,min_delta_z=0)
+            return c[i],a[i],w[i],z[i],err[0]
+        tz[0]=z[i-1]
+        tz[1]=(z[i-1]+z[i])/2.
+        tz[2]=z[i]
+        tz[3]=(z[i+1]+z[i])/2.
+        tz[4]=z[i+1]
+        tc[0]=c[i-1]
+        tc[2]=c[i]
+        tc[4]=c[i+1]
+        ta[0]=a[i-1]
+        ta[2]=a[i]
+        ta[4]=a[i+1]
+        tw[0]=w[i-1]
+        tw[2]=w[i]
+        tw[4]=w[i+1]
+        tc[1],ta[1],tw[1]=zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,tz[1],wave_range,x,gx,groups,fixed_line_ratio,z_for_range=m)
+        tc[3],ta[3],tw[3]=zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,tz[3],wave_range,x,gx,groups,fixed_line_ratio,z_for_range=m)
+        tracker.add(tz[1],tc[1])
+        tracker.add(tz[3],tc[3])
+        
+        z=tz.copy()
+        c=tc.copy()
+        a=ta.copy()
+        w=tw.copy()
+    print "error in zz_fit_z"
+    zbest,err,dchi2 = tracker.find_best(ntrack=1,min_delta_z=0)
+    return dchi2[0],am,wm,zbest[0],err[0]
 
 def chi2_of_line_ratio(list_of_results,lines,line_ratio_constraints) :
         
@@ -399,7 +568,7 @@ def zz_subtract_continuum(wave,flux,ivar,wave_step=150.) :
         subtracted_flux.append(flux[index]-np.interp(wave[index],allwave,continuum))
     return subtracted_flux
             
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_nsig=3.,ntrack=3,remove_continuum=True,recursive=True,targetid=0) :
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_range=2000.,ntrack=3,remove_continuum=True,recursive=True,targetid=0,vdisp_min=1.,vdisp_max=500.) :
 
     """
     args :
@@ -490,17 +659,19 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,lin
         log.warning("ndata=%d skip this spectrum")
         return None,None
 
+    # type conversion
+    lines=np.array(lines)
+    
     log.debug("lines=%s"%str(lines))
     if line_ratio_priors is not None :
         log.debug("line_ratio_priors=%s"%str(line_ratio_priors))
-    log.debug("vdisps_fast=%s km/s"%str(vdisps_fast))
-    log.debug("vdisps_improved=%s km/s"%str(vdisps_improved))
+    log.debug("vdisps=%s km/s"%str(vdisps))
     log.debug("zstep=%f"%zstep)
     log.debug("nframes=%d"%nframes)
     log.debug("nlines=%d"%(lines.size))
         
     # find group of lines that we have to fit together because they overlap
-    groups = find_groups(lines,lines*np.max(vdisps_fast)/2.9970e5) # consider the largest velocity dispersion here
+    groups = find_groups(lines,lines*np.max(vdisps)/2.9970e5) # consider the largest velocity dispersion here
     
     
 
@@ -561,8 +732,8 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,lin
         # do a loop on range of velocity dispersion
         dchi2=1e12
         best_vdisp_for_z=0
-        for vdisp in vdisps_fast :
-            v_dchi2,v_line_amplitudes,v_line_amplitudes_ivar = zz_line_fit(wave,flux_to_fit,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_nsig,x,gx,groups,fixed_line_ratio=fixed_line_ratio)
+        for vdisp in vdisps :
+            v_dchi2,v_line_amplitudes,v_line_amplitudes_ivar = zz_line_fit(wave,flux_to_fit,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_range,x,gx,groups,fixed_line_ratio=fixed_line_ratio)
             if v_dchi2 < dchi2 :
                 dchi2=v_dchi2
                 line_amplitudes = v_line_amplitudes
@@ -583,119 +754,120 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps_fast,vdisps_improved,lin
     
     log.debug("find_best in range %f %f (nz=%d)"%(tracker.zscan[0],tracker.zscan[-1],len(tracker.zscan)))
     best_zs,best_z_errors,best_chi2s=tracker.find_best(ntrack=ntrack,min_delta_z=0.002)
-    best_z_errors[best_z_errors<zstep]=zstep
+    
         
-    if recursive :
+    
 
-        log.debug("first pass best z =%f chi2/ndata=%f, second z=%f dchi2=%f, third z=%f dchi2=%f"%(best_zs[0],best_chi2s[0]/ndata,best_zs[1],best_chi2s[1]-best_chi2s[0],best_zs[2],best_chi2s[2]-best_chi2s[0]))
+    log.debug("first pass best z =%f+-%f chi2/ndata=%f, second z=%f dchi2=%f, third z=%f dchi2=%f"%(best_zs[0],best_z_errors[0],best_chi2s[0]/ndata,best_zs[1],best_chi2s[1]-best_chi2s[0],best_zs[2],best_chi2s[2]-best_chi2s[0]))
 
-        
-        #you want to see the redshift scan for this one ?
-        #import pylab
-        #pylab.plot(tracker.zscan,tracker.chi2scan)
-        #pylab.show()
-        
-        
 
-        # if recursive we refit here all of the best chi2s
-        best_results=[]
+    #you want to see the redshift scan for this one ?
+    #import pylab
+    #pylab.plot(tracker.zscan,tracker.chi2scan)
+    #pylab.show()
 
-        full_zscan = np.array(tracker.zscan)
-        full_chi2scan = np.array(tracker.chi2scan)
-        
 
-        # define rank label for results
-        rank_labels = np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
-        for i in range(rank_labels.size,ntrack) :
-            rank_labels=np.append(rank_labels,np.array(["%dTH"%(i+1)])) # even more ridiculous
+
+    # if recursive we refit here all of the best chi2s
+    best_results=[]
+
+    full_zscan = np.array(tracker.zscan)
+    full_chi2scan = np.array(tracker.chi2scan)
+
+
+    # define rank label for results
+    rank_labels = np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
+    for i in range(rank_labels.size,ntrack) :
+        rank_labels=np.append(rank_labels,np.array(["%dTH"%(i+1)])) # even more ridiculous
+
+    # here we loop on all the tracked solutions
+    current_zstep = zstep
+    for rank in range(best_zs.size) :
+        # improve the fit
+        # improve z
+        dz=max(best_z_errors[rank],current_zstep)
+        z_min = best_zs[rank]-2*dz
+        z_max = best_zs[rank]+2*dz
+        dchi2, line_amplitudes, line_amplitudes_ivar, best_z, best_z_err = zz_fit_z(wave,flux,ivar,resolution,lines,best_vdisp,line_ratio_priors,z_min,z_max,wave_range,x,gx,groups,fixed_line_ratio=fixed_line_ratio)  
+        log.debug("rank=%d z=%f+-%f (zmin=%f zmax=%f dz=%f) -> %f+%f",rank, best_zs[rank],best_z_errors[rank],z_min,z_max,dz,best_z,best_z_err)
+        # improve zdisp
+        dchi2, line_amplitudes, line_amplitudes_ivar, best_vdisp, best_vdisp_error = zz_fit_vdisp(wave,flux,ivar,resolution,lines,vdisp_min,vdisp_max,line_ratio_priors,best_z,wave_range,x,gx,groups,fixed_line_ratio=fixed_line_ratio)
+        log.debug("rank=%d vdisp= %f+%f",rank, best_vdisp, best_vdisp_error)
+        # improve z
+        dz=max(best_z_err,0.0001)
+        z_min = best_z-2*dz
+        z_max = best_z+2*dz
+        dchi2, line_amplitudes, line_amplitudes_ivar, best_z, best_z_err = zz_fit_z(wave,flux,ivar,resolution,lines,best_vdisp,line_ratio_priors,z_min,z_max,wave_range,x,gx,groups,fixed_line_ratio=fixed_line_ratio)  
+        log.debug("rank=%d z=%f+-%f -> %f+%f",rank, best_zs[rank],best_z_errors[rank],best_z,best_z_err)
         
-        # here we loop on all the tracked solutions
-        current_zstep = zstep
-        for rank in range(best_zs.size) :
-            # second loop about minimum
-            # where we save things to compute errors
-            dz=current_zstep
-            zmin      = best_zs[rank]-dz
-            zmax      = best_zs[rank]+dz  
-            zstep=(zmax-zmin)/100. # new refined zstep
-            log.debug("for rank = %d zmin = %f zmax = %f zstep = %f"%(rank,zmin,zmax,zstep))
-            res = zz_line_scan(wave,flux_to_fit,ivar,resolution,lines,vdisps_fast=vdisps_improved,vdisps_improved=None,
-                               line_ratio_priors=line_ratio_priors,fixed_line_ratio=fixed_line_ratio,
-                               zstep=zstep,zmin=zmin,zmax=zmax,wave_nsig=5.,recursive=False,ntrack=1,remove_continuum=False,targetid=targetid)
-            best_results.append(res)
-            
-        # now that we have finished improving the fits,
-        # order results if it turns out that the ranking has been modified by the improved fit
-        chi2=np.zeros((ntrack))
+        ndf=0
+        for index in range(nframes) :
+            ndf += np.sum(ivar[index]>0)
+        ndf-=(np.sum(line_amplitudes_ivar>0)+1)
+        snr=math.sqrt(np.sum(line_amplitudes**2*line_amplitudes_ivar))
+        res={}
+        res["Z"]=best_z
+        res["Z_ERR"]=best_z_err
+        res["CHI2"]=chi2_0 + dchi2
+        res["CHI2PDF"]=(chi2_0 + dchi2)/ndf
+        res["SNR"]=snr
+        res["VDISP"]=best_vdisp
+        res["VDISP_ERR"]=best_vdisp_error
+        res["TARGETID"]=targetid 
+        for line_index in range(lines.size) :
+            res["FLUX_%dA"%lines[line_index]]=line_amplitudes[line_index]
+            livar=line_amplitudes_ivar[line_index]
+            res["FLUX_ERR_%dA"%lines[line_index]]=(livar>0)/math.sqrt(livar+(livar==0))
+        best_results.append(res)
+
+    # now that we have finished improving the fits,
+    # order results if it turns out that the ranking has been modified by the improved fit
+    chi2=np.zeros((ntrack))
+    for i in range(ntrack) :
+        chi2[i]=best_results[i]["CHI2"]
+    indices=np.argsort(chi2)
+    if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
+        swapped_best_results=[]
         for i in range(ntrack) :
-            chi2[i]=best_results[i]["CHI2"]
-        indices=np.argsort(chi2)
+            swapped_best_results.append(best_results[indices[i]])
+        best_results=swapped_best_results
+        chi2=chi2[indices]
+
+    # if we have line_ratio_constraints, use them
+    # if delta chi2 is not great
+    dchi2=chi2-chi2[0]        
+    mindchi2=300
+    if line_ratio_constraints is not None and dchi2[1]<mindchi2: 
+        chi2_of_ratios=chi2_of_line_ratio(best_results,lines,line_ratio_constraints)
+        #chi2=np.zeros((ntrack))
+        #for i in range(ntrack) :
+        #    chi2[i]=best_results[i]["CHI2"]+chi2_of_ratios[i]
+        #indices=np.argsort(chi2)
+
+        # ignore results with dchi2>mindchi2
+        chi2_of_ratios[dchi2>mindchi2] += 10000.
+
+        indices=np.argsort(chi2_of_ratios)
         if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
+            if indices[0] != 0 :
+                log.warning("SWAPPING results based on chi2 of line ratios : best z %f -> %f"%(best_results[0]["Z"],best_results[indices[0]]["Z"]))
             swapped_best_results=[]
             for i in range(ntrack) :
                 swapped_best_results.append(best_results[indices[i]])
             best_results=swapped_best_results
-            chi2=chi2[indices]
-        
-        # if we have line_ratio_constraints, use them
-        # if delta chi2 is not great
-        dchi2=chi2-chi2[0]        
-        mindchi2=25
-        if line_ratio_constraints is not None and dchi2[1]<mindchi2: 
-            chi2_of_ratios=chi2_of_line_ratio(best_results,lines,line_ratio_constraints)
-            #chi2=np.zeros((ntrack))
-            #for i in range(ntrack) :
-            #    chi2[i]=best_results[i]["CHI2"]+chi2_of_ratios[i]
-            #indices=np.argsort(chi2)
 
-            # ignore results with dchi2>mindchi2
-            chi2_of_ratios[dchi2>mindchi2] += 10000.
-            
-            indices=np.argsort(chi2_of_ratios)
-            if np.sum(np.abs(indices-range(ntrack)))>0 : # need swap
-                if indices[0] != 0 :
-                    log.warning("SWAPPING results based on chi2 of line ratios : best z %f -> %f"%(best_results[0]["Z"],best_results[indices[0]]["Z"]))
-                swapped_best_results=[]
-                for i in range(ntrack) :
-                    swapped_best_results.append(best_results[indices[i]])
-                best_results=swapped_best_results
-
-        labels=np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
-        for i in range(labels.size,ntrack) :
-            labels=np.append(labels,np.array(["%dTH"%(i+1)])) # even more ridiculous
-        final_results={}
-        for i in range(ntrack) :
-            for k in best_results[i].keys() :
+    labels=np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
+    for i in range(labels.size,ntrack) :
+        labels=np.append(labels,np.array(["%dTH"%(i+1)])) # even more ridiculous
+    final_results={}
+    for i in range(ntrack) :
+        for k in best_results[i].keys() :
+            if k=="TARGETID" :
+                final_results[k]=best_results[i][k]
+            else :
                 final_results["%s_%s"%(labels[i],k)]=best_results[i][k]
-        
-        end_time = time.clock( )
-        log.info("best z=%f+-%f chi2/ndf=%3.2f dchi2=%3.1f time=%f sec"%(final_results["BEST_Z"],final_results["BEST_Z_ERR"],final_results["BEST_CHI2PDF"],final_results["SECOND_CHI2"]-final_results["BEST_CHI2"],end_time-start_time))
-        return final_results
     
-    # here we are outside of the recursive loop
-            
-    
-    ndf=0
-    for index in range(nframes) :
-        ndf += np.sum(ivar[index]>0)
-    ndf-=(np.sum(best_z_line_amplitudes_ivar>0)+1)
-    
-    snr=math.sqrt(np.sum(best_z_line_amplitudes**2*best_z_line_amplitudes_ivar))
-    
-    res={}
-    res["Z"]=best_zs[0]
-    res["Z_ERR"]=best_z_errors[0]
-    res["CHI2"]=best_chi2s[0]
-    res["CHI2PDF"]=best_chi2s[0]/ndf
-    res["SNR"]=snr
-    res["VDISP"]=best_vdisp
-    res["TARGETID"]=targetid
-    
-    for line_index in range(lines.size) :
-        res["FLUX_%dA"%lines[line_index]]=best_z_line_amplitudes[line_index]
-        livar=best_z_line_amplitudes_ivar[line_index]
-        res["FLUX_ERR_%dA"%lines[line_index]]=(livar>0)/math.sqrt(livar+(livar==0))
-    
-    
-    
-    return res
+    end_time = time.clock( )
+    log.info("best z=%f+-%f chi2/ndf=%3.2f dchi2=%3.1f time=%f sec"%(final_results["BEST_Z"],final_results["BEST_Z_ERR"],final_results["BEST_CHI2PDF"],final_results["SECOND_CHI2"]-final_results["BEST_CHI2"],end_time-start_time))
+    return final_results
+
