@@ -44,11 +44,11 @@
 [6,4,0.000000,2.353836],                
 [6,5,0.000000,10.435503]
 ],
-"zwarn_min_dchi2" : 4.0,
-"zwarn_min_total_snr" : 3.0,
+"zwarn_min_dchi2" : 0.0,
+"zwarn_min_total_snr" : 7.0,
 "zwarn_min_number_of_significant_lines" : 2,
 "zwarn_min_line_snr" : 3.0 ,
-"zwarn_min_oII_snr" : 5.0
+"zwarn_min_oII_snr" : 0.0
 },
 
 "OTHER":{}

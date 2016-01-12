@@ -616,8 +616,8 @@ def zz_set_warning(results,lines,zwarn_min_dchi2=None,zwarn_min_total_snr=None,z
     if zwarn_min_oII_snr is not None :
         oIIflux=results["BEST_FLUX_3727A"]+results["BEST_FLUX_3729A"]
         oIIerr=math.sqrt(results["BEST_FLUX_ERR_3727A"]**2+results["BEST_FLUX_ERR_3729A"]**2)
-        if oIIerr>0 and oIIflux/oIIerr>zwarn_min_oII_snr :
-            ok=True # this is a OR test, we think it's ok if above this
+        if oIIerr>0 and oIIflux/oIIerr<zwarn_min_oII_snr :
+            ok=False
     
     # can do better with bits ...
     zwarn = 0 + int(ok==False)
