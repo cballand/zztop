@@ -766,7 +766,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     # compute chi2 for zero lines
     chi2_0 = 0.
     for frame_index in range(nframes) :
-        chi2_0 += np.sum(ivar[frame_index]*flux[frame_index]**2)
+        chi2_0 += np.sum(ivar[frame_index]*flux_to_fit[frame_index]**2)
     
     line_amplitudes=np.zeros((lines.size))
     line_amplitudes_ivar=np.zeros((lines.size))
