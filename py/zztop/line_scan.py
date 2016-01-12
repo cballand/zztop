@@ -251,9 +251,12 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_r
     BUT, we may have changed the amplitudes with the prior !
     """
     
-    # apply delta chi2 per group
+    # apply delta chi2 
     dchi2 = A.dot(params).T.dot(params) - 2*np.inner(B,params)
-    
+    # add number of free params to allow chi2 comparison
+    dchi2 += np.sum(np.diag(A)>0)
+
+
     """
     if show :
             import pylab
@@ -566,19 +569,24 @@ def zz_subtract_continuum(wave,flux,ivar,wave_step=150.) :
     n=int((wmax-wmin)/wave_step)    
     knots=wmin+(wmax-wmin)/(n+1)*(0.5+np.arange(n))
     # iterative fitting and clipping (to remove dependence on emission lines!)
-    for loop in range(10) : 
+    
+    for loop in range(100) : 
         toto=scipy.interpolate.splrep(allwave,allflux,k=3,task=-1,t=knots,w=allivar)
         continuum=scipy.interpolate.splev(allwave,toto)
-        out=np.where(allivar*(allflux-continuum)**2>4.)[0]
-        if out.size==0 :
+        if loop<2 :
+            out=np.where(allivar*(allflux-continuum)**2>9.)[0]
+        else :
+            out=np.where(allivar*(allflux-continuum)**2>1.)[0]
+        if out.size==0 and loop>2:
             break
         
         allivar[out]=0.
     
     #import pylab
     #pylab.plot(allwave,allflux,"-",c="b")
+    #pylab.plot(allwave[allivar==0],allflux[allivar==0],"o",c="b")
     #pylab.plot(allwave,continuum,"-",c="r")
-    #pylab.plot(allwave,allivar*(allflux-continuum)**2,"-",c="k")
+    ###pylab.plot(allwave,allivar*(allflux-continuum)**2,"-",c="k")
     #pylab.show()
     
     subtracted_flux=[]
