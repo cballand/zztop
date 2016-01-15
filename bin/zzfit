@@ -58,7 +58,7 @@ def main() :
     z_brick=Brick(args.z)
     brickname = args.b
     
-    elg_spectra=np.where(b_brick.hdu_list[7].data["OBJTYPE"][args.first:]=="ELG")[0]+args.first
+    elg_spectra=np.where(b_brick.hdu_list['_TRUTH'].data["OBJTYPE"][args.first:]=="ELG")[0]+args.first
     
     #########################################
     ## fit parameters are in config file
