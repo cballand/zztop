@@ -2,9 +2,7 @@
 
 from astropy.io import fits
 import argparse
-import pylab
 import numpy as np
-from math import *
 import re
 import string
 import sys
@@ -76,9 +74,6 @@ def main() :
     lines=lines[ok]
     mean_flux_wrt_oII=np.sum(ivar*flux,axis=0)[ok]/sivar[ok]
     err_flux_wrt_oII=1./np.sqrt(sivar[ok])
-    #pylab.plot(lines,mean_flux_wrt_oII,"o")
-    #pylab.errorbar(lines,mean_flux_wrt_oII,err_flux_wrt_oII,fmt="o")    
-    #pylab.show()
     
     # refit the amp of each galaxy wrt to mean_flux_wrt_oII
     ngal=table.size
@@ -111,15 +106,6 @@ def main() :
     
     a    = np.sum(ivar,axis=0)
     mean = np.sum(ivar*flux,axis=0)/a
-    
-    if False :
-        for i in range(ngal) :
-            ok=np.where((ivar[i]>0)&(ivar[i]>(1./0.1)**2))[0]
-            if ok.size :
-                pylab.plot(lines[ok],flux[i,ok],"o",alpha=0.1,color="gray")
-        pylab.plot(lines,mean,"o",color="r")
-        pylab.show()
-        sys.exit(12)
     
     residuals=flux-mean
     
@@ -155,10 +141,8 @@ def main() :
                         
             dist=np.max(np.abs(newvect-eigenvectors[e]))
             eigenvectors[e]=newvect
-            #print loop,":",eigenvectors[e]," dist=",dist
             if dist<1e-6 :
                 break
-        # remove this component
         for i in range(lines.size) : 
             residuals[:,i] -= coefs[:,e]*eigenvectors[e,i]
         
@@ -207,17 +191,7 @@ def main() :
     log.info("wrote %s"%args.outfile)
     
     
-    if False :
-        for e in range(lines.size) : 
-            log.info("coef #%d mean= %f rms= %f"%(e,np.mean(coefs[:,e]),np.std(coefs[:,e])))
-            h,b=np.histogram(coefs[:,e],bins=50)
-            x=b[:-1]+(b[1]-b[0])/2.
-            pylab.plot(x,h,label="comp #%d"%e)
-        for e in range(lines.size) :
-            log.info("comp #%d = %s norme=%f"%(e,str(eigenvectors[e]),np.sum(eigenvectors[e]**2)))
     
-        pylab.legend(loc="upper right")
-        pylab.show()
     
     
     
