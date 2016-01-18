@@ -16,6 +16,8 @@ def main() :
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-i','--infile', type = str, default = None, required=True,
                         help = 'path to zzbest.fits file')
+    parser.add_argument('-o','--outfile', type = str, default = None, required=True,
+                        help = 'path to output json file')
     args = parser.parse_args()
     log  = get_logger()
     
@@ -37,21 +39,9 @@ def main() :
     
 
 
-    # I require oII flux being measured
+    
     oIIline1=3727
     oIIline2=3729
-    """
-    i1=np.where(lines==oIIline1)[0]
-    i2=np.where(lines==oIIline2)[0]
-    if i1.size==0 or i2.size==0 :
-       log.error("cannot find oII lines in file")
-       sys.exit(12) 
-    i1=i1[0]
-    i2=i2[0]
-    """
-    
-    
-    
     try :
         oIIflux=table["BEST_FLUX_%dA"%oIIline1]+table["BEST_FLUX_%dA"%oIIline2]
         oIIerr=np.sqrt(table["BEST_FLUX_%dA"%oIIline1]**2+table["BEST_FLUX_%dA"%oIIline2]**2)
@@ -60,51 +50,89 @@ def main() :
         log.error(sys.exc_info())
         sys.exit(12)
     
-     
+    # first step : compute an average set of line ratios
+    # by scaling fluxes wrt to oII
+    # we will then use this average set of line ratios to normalize 
+    # all entries and then start the pca
     selection=np.where((oIIflux>0)&(oIIerr>0))[0]
     if selection.size == 0 :
         log.error("no entry with valid oII flux")
         sys.exit(12)
     
-    # remove oII doublet from list of lines for pca
-    # and check we have data
-    lines_for_pca=[]
-    
-    for line in lines :
-        if line==oIIline1 or line==oIIline2 :
-            continue
-        nmeas=np.sum(table["BEST_FLUX_ERR_%dA"%line][selection]>0)
-        if nmeas==0 :
-            log.warning("no valid measurement for line %dA"%line)
-            continue
-        lines_for_pca.append(line)
-    lines_for_pca=np.array(lines_for_pca)
-    
-    flux=np.zeros((selection.size,lines_for_pca.size))
-    ivar=np.zeros((selection.size,lines_for_pca.size))
-    for i in range(lines_for_pca.size) :
-        flux[:,i]=table["BEST_FLUX_%dA"%lines_for_pca[i]][selection]/oIIflux[selection]
-        var=(table["BEST_FLUX_ERR_%dA"%lines_for_pca[i]][selection]/oIIflux[selection])**2
+     
+    flux=np.zeros((selection.size,lines.size))
+    ivar=np.zeros((selection.size,lines.size))
+    for i in range(lines.size) :
+        flux[:,i]=table["BEST_FLUX_%dA"%lines[i]][selection]/oIIflux[selection]
+        var=(table["BEST_FLUX_ERR_%dA"%lines[i]][selection]/oIIflux[selection])**2
         # account for error on oIIflux
         var += (flux[:,i]*oIIerr[selection]/oIIflux[selection])**2        
         mask=np.where(var>0)[0]
         ivar[mask,i]=1./var[mask]
-
-    mean=np.sum(ivar*flux,axis=0)/np.sum(ivar,axis=0)
     
+    # this is the mean line ratios
+    sivar=np.sum(ivar,axis=0)
+    ok=np.where(sivar>0)[0]
+    lines=lines[ok]
+    mean_flux_wrt_oII=np.sum(ivar*flux,axis=0)[ok]/sivar[ok]
+    err_flux_wrt_oII=1./np.sqrt(sivar[ok])
+    #pylab.plot(lines,mean_flux_wrt_oII,"o")
+    #pylab.errorbar(lines,mean_flux_wrt_oII,err_flux_wrt_oII,fmt="o")    
+    #pylab.show()
+    
+    # refit the amp of each galaxy wrt to mean_flux_wrt_oII
+    ngal=table.size
+    log.info("number of galaxies = %d"%ngal)
+    
+    
+    # fill array
+    flux=np.zeros((ngal,lines.size))
+    ivar=np.zeros((ngal,lines.size))
+    for i in range(lines.size) :
+        flux[:,i]=table["BEST_FLUX_%dA"%lines[i]]
+        var=(table["BEST_FLUX_ERR_%dA"%lines[i]])**2
+        ok=np.where(var>0)[0]
+        ivar[ok,i]=1./var[ok]
+    
+    # for each gal, fit scale and apply it
+    a=np.sum(ivar*mean_flux_wrt_oII**2,axis=1)
+    b=np.sum(ivar*mean_flux_wrt_oII*flux,axis=1)
+    scale=b/(a+(a==0))
+    
+    for i in range(ngal) :
+        if scale[i] > 0 :
+            flux[i] /= scale[i]
+            ivar[i] *= scale[i]**2
+        else :
+            flux[i]=0.
+            ivar[i]=0.
+
+    
+    
+    a    = np.sum(ivar,axis=0)
+    mean = np.sum(ivar*flux,axis=0)/a
+    
+    if False :
+        for i in range(ngal) :
+            ok=np.where((ivar[i]>0)&(ivar[i]>(1./0.1)**2))[0]
+            if ok.size :
+                pylab.plot(lines[ok],flux[i,ok],"o",alpha=0.1,color="gray")
+        pylab.plot(lines,mean,"o",color="r")
+        pylab.show()
+        sys.exit(12)
     
     residuals=flux-mean
     
     # now we can try to do some sort of npca
-    eigenvectors=np.zeros((lines_for_pca.size,lines_for_pca.size))
-    coefs=np.zeros((selection.size,lines_for_pca.size))
+    eigenvectors=np.zeros((lines.size,lines.size))
+    coefs=np.zeros((ngal,lines.size))
     
-    bb=np.zeros((lines_for_pca.size))
-    aa=np.zeros((lines_for_pca.size))
+    bb=np.zeros((lines.size))
+    aa=np.zeros((lines.size))
     
-    for e in range(lines_for_pca.size) :
+    for e in range(lines.size) :
         i=np.argmax(np.std(residuals,axis=0))
-        eigenvectors[e]=np.ones(lines_for_pca.size) # 
+        eigenvectors[e]=np.ones(lines.size) # 
         eigenvectors[e]  /= np.sqrt(np.sum(eigenvectors[e]**2))
         
         for loop in range(100) :            
@@ -113,7 +141,7 @@ def main() :
             coefs[:,e]=b/(a+(a==0))
             aa *= 0.
             bb *= 0.            
-            for i in range(lines_for_pca.size) : 
+            for i in range(lines.size) : 
                 bb[i]=np.sum(ivar[:,i]*coefs[:,e]*residuals[:,i])
                 aa[i]=np.sum(ivar[:,i]*coefs[:,e]**2)
             newvect=bb/aa
@@ -131,42 +159,67 @@ def main() :
             if dist<1e-6 :
                 break
         # remove this component
-        for i in range(lines_for_pca.size) : 
+        for i in range(lines.size) : 
             residuals[:,i] -= coefs[:,e]*eigenvectors[e,i]
         
-
-    for e in range(lines_for_pca.size) : 
-        log.info("coef #%d mean= %f rms= %f"%(e,np.mean(coefs[:,e]),np.std(coefs[:,e])))
-        h,b=np.histogram(coefs[:,e],bins=50)
-        x=b[:-1]+(b[1]-b[0])/2.
-        pylab.plot(x,h,label="comp #%d"%e)
-    log.info("mean ratios = %s"%str(mean))
-    for e in range(lines_for_pca.size) :
-        log.info("comp #%d = %s norme=%f"%(e,str(eigenvectors[e]),np.sum(eigenvectors[e]**2)))
+    file=open(args.outfile,"w")
+    file.write('"pca":{\n')
+    file.write('"lines": [')
+    for l in lines :
+        if l != lines[0] :
+            file.write(",")
+        file.write("%d"%l)
+    file.write('],\n')
+    file.write('"mean_flux": [')
+    for  e in range(eigenvectors.shape[0]) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%mean[e])
+    file.write('],\n')
     
-    pylab.legend(loc="upper right")
-
-
-
-
-
-
-
-
-
-
-
-
-    pylab.show()
-    sys.exit(12)
-        
-        
-        
-
-    pylab.plot(lines_for_pca,mean,"o")
-    pylab.show()
+    file.write('"components": [\n')
+    for e in range(eigenvectors.shape[0]) :
+        file.write('[')
+        for i in range(eigenvectors.shape[1]) :
+            if i>0 :
+                file.write(",")
+            file.write("%f"%eigenvectors[e,i])
+        if e<eigenvectors.shape[0]-1 :
+            file.write('],\n')
+        else :
+            file.write(']\n')
+    file.write('],\n')
+    file.write('"mean_coef": [')
+    for e in range(eigenvectors.shape[0]) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.mean(coefs[:,e]))
+    file.write('],\n')
+    file.write('"rms_coef": [')
+    for e in range(eigenvectors.shape[0]) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.std(coefs[:,e]))
+    file.write(']\n')
+    file.write('}\n')
     
-    log.info("lines for pca: %s"%str(lines_for_pca))
+    file.close()
+    log.info("wrote %s"%args.outfile)
+    
+    
+    if False :
+        for e in range(lines.size) : 
+            log.info("coef #%d mean= %f rms= %f"%(e,np.mean(coefs[:,e]),np.std(coefs[:,e])))
+            h,b=np.histogram(coefs[:,e],bins=50)
+            x=b[:-1]+(b[1]-b[0])/2.
+            pylab.plot(x,h,label="comp #%d"%e)
+        for e in range(lines.size) :
+            log.info("comp #%d = %s norme=%f"%(e,str(eigenvectors[e]),np.sum(eigenvectors[e]**2)))
+    
+        pylab.legend(loc="upper right")
+        pylab.show()
+    
+    
     
     
 if __name__ == '__main__':
