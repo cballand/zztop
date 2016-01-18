@@ -236,9 +236,20 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_r
                     elif ratio>max_ratio :
                         line_amplitudes[other_line_index]  = line_amplitudes[line_index]*max_ratio
     
-    # force non-negative here ?
-    line_amplitudes[line_amplitudes<0]=0.
-    
+    number_of_free_params=np.sum(np.diag(A)>0)
+
+    # force non-negative here
+    # this makes sure chi2 is same as without any signal
+    for group_index in groups :
+        lines_in_group=groups[group_index]
+        if np.sum(line_amplitudes[lines_in_group]<0)>0 : # has neg. amplitude
+            line_amplitudes[lines_in_group]=0.
+            params[lines_in_group]=0.
+            cont_index=nlines+group_index
+            params[cont_index]=0.
+            number_of_free_params-=(np.sum(line_amplitudes_ivar[lines_in_group]>0)+1) # lines and continuum
+            
+            
     # add chi2 for this group
     """
     chi2 = sum w*(data - amp*prof)**2
@@ -254,7 +265,16 @@ def zz_line_fit(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z,wave_r
     # apply delta chi2 
     dchi2 = A.dot(params).T.dot(params) - 2*np.inner(B,params)
     # add number of free params to allow chi2 comparison
-    dchi2 += np.sum(np.diag(A)>0)
+    dchi2 += number_of_free_params
+
+    # debugging
+    # if np.sum(line_amplitudes)==0 and dchi2 != 0 :
+    #     print "THIS IS BIZARRE"
+    #     print line_amplitudes
+    #     print line_amplitudes_ivar
+    #     print params
+    #     print number_of_free_params
+    #     sys.exit(12)
 
 
     """
@@ -509,12 +529,76 @@ def zz_fit_z(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z_min,z_max
     zbest,err,dchi2 = tracker.find_best(ntrack=1,min_delta_z=0)
     return dchi2[0],am,wm,zbest[0],err[0]
 
+def chi2_of_line_ratio_pca_prior(list_of_results,lines,line_ratio_pca_prior) :
+    nres=len(list_of_results)
+    chi2=np.zeros((nres))
+    log=get_logger()
+    refchi2=list_of_results[0]["CHI2"]
+    log.debug("starting")
+
+    
+    pca_lines=np.array(line_ratio_pca_prior["lines"])
+    log.debug("lines of prior = %s"%pca_lines)
+    
+    
+    pca_mean_flux=np.array(line_ratio_pca_prior["mean_flux"])
+    pca_components=np.array(line_ratio_pca_prior["components"])
+    pca_mean_coef=np.array(line_ratio_pca_prior["mean_coef"])
+    pca_rms_coef=np.array(line_ratio_pca_prior["rms_coef"])
+    
+
+    for res_index,result in zip(range(nres),list_of_results) :
+        # fluxes
+        flux=np.zeros((pca_lines.size))
+        ivar=np.zeros((pca_lines.size))
+        for i in range(pca_lines.size) :
+            err=result["FLUX_ERR_%dA"%pca_lines[i]]
+            if err<=0 :
+                continue
+            flux[i]=result["FLUX_%dA"%pca_lines[i]]
+            ivar[i]=1./err**2
+        # scale according to pca mean flux
+        a=np.sum(ivar*pca_mean_flux**2)
+        if a==0 :
+            log.warning("cannot compute pca prior for result #%d because null ivar"%res_index)
+            continue
+        scale=np.sum(ivar*flux*pca_mean_flux)/a
+        if scale<=0 :
+            log.warning("cannot compute pca prior for result #%d because scale=%f"%(res_index,scale))
+            #log.warning("results = %s"%str(result))
+            continue
+        flux /= scale
+        ivar *= scale**2
+        residuals = flux-pca_mean_flux
+        residuals[ivar==0]=0.
+        
+        #import pylab
+        #pylab.errorbar(pca_lines[ivar>0],flux[ivar>0],1./np.sqrt(ivar[ivar>0]),fmt="o",c="b")
+        #pylab.plot(pca_lines,pca_mean_flux,"o",c="r")
+        #pylab.show()
+        
+        # loop on pca components
+        for i in range(pca_components.shape[0]) :
+            # compute pca coefs  
+            coef_ivar=np.sum(ivar*pca_components[i]**2)
+            if coef_ivar==0 :
+                continue
+            b=np.sum(ivar*pca_components[i]*residuals)
+            coef=b/coef_ivar
+            coef_chi2 = (coef-pca_mean_coef[i])**2/(1./coef_ivar+pca_rms_coef[i]**2)
+            
+            #log.debug("comp #%d meas coef=%f +- %f chi2=%f"%(i,coef,1./math.sqrt(coef_ivar),coef_chi2))
+            chi2[res_index] += coef_chi2
+        log.debug("res #%d line_ratio_pca_prior chi2=%f"%(res_index,chi2[res_index]))
+    return chi2
+    
+
 def chi2_of_line_ratio(list_of_results,lines,line_ratio_constraints) :
         
     nres=len(list_of_results)
     chi2=np.zeros((nres))
     #log=get_logger()
-    refchi2=list_of_results[0]["CHI2"]
+    #refchi2=list_of_results[0]["CHI2"]
     
                 
     for i,result in zip(range(nres),list_of_results) :
@@ -623,7 +707,7 @@ def zz_set_warning(results,lines,zwarn_min_dchi2=None,zwarn_min_total_snr=None,z
     zwarn = 0 + int(ok==False)
     return zwarn
 
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_range=2000.,ntrack=3,remove_continuum=True,recursive=True,targetid=0,vdisp_min=1.,vdisp_max=500.,vdisp_prior_mean=None,vdisp_prior_rms=None,zwarn_min_dchi2=None,zwarn_min_total_snr=None,zwarn_min_number_of_significant_lines=None,zwarn_min_line_snr=None,zwarn_min_oII_snr=None,oII_min_flux_prior=None) :
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_range=2000.,ntrack=3,remove_continuum=True,recursive=True,targetid=0,vdisp_min=1.,vdisp_max=500.,vdisp_prior_mean=None,vdisp_prior_rms=None,zwarn_min_dchi2=None,zwarn_min_total_snr=None,zwarn_min_number_of_significant_lines=None,zwarn_min_line_snr=None,zwarn_min_oII_snr=None,oII_min_flux_prior=None,line_ratio_pca_prior=None) :
 
     """
     args :
@@ -856,6 +940,8 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
         dchi2, line_amplitudes, line_amplitudes_ivar, best_z, best_z_err = zz_fit_z(wave=wave,flux=flux_to_fit,ivar=ivar,resolution=resolution,lines=lines,vdisp=best_vdisp,line_ratio_priors=line_ratio_priors,z_min=z_min,z_max=z_max,wave_range=wave_range,x=x,gx=gx,groups=groups,fixed_line_ratio=fixed_line_ratio)  
         log.debug("rank=%d z=%f+-%f (zmin=%f zmax=%f dz=%f vdisp=%f) -> %f+%f",rank, best_zs[rank],best_z_errors[rank],z_min,z_max,dz,best_vdisp,best_z,best_z_err)
         
+        
+        
         # improve zdisp
         dchi2, line_amplitudes, line_amplitudes_ivar, best_vdisp, best_vdisp_error = zz_fit_vdisp(wave=wave,flux=flux_to_fit,ivar=ivar,resolution=resolution,lines=lines,vdisp_min=vdisp_min,vdisp_max=vdisp_max,line_ratio_priors=line_ratio_priors,z=best_z,wave_range=wave_range,x=x,gx=gx,groups=groups,fixed_line_ratio=fixed_line_ratio)
         log.debug("rank=%d vdisp= %f+%f",rank, best_vdisp, best_vdisp_error)
@@ -902,7 +988,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     
     log.debug("After improved fit :")
     for i in range(ntrack) :
-        log.debug("rank #%d z=%f chi2=%f dchi2=%f"%(i,best_results[i]["Z"],best_results[i]["CHI2"],best_results[i]["CHI2"]-best_results[0]["CHI2"]))
+        log.debug("rank #%d z=%f chi2=%f dchi2=%f snr=%f"%(i,best_results[i]["Z"],best_results[i]["CHI2"],best_results[i]["CHI2"]-best_results[0]["CHI2"],best_results[i]["SNR"]))
     
 
     # if we have vdisp priors, add to chi2
@@ -916,7 +1002,12 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
         chi2_of_ratios=chi2_of_line_ratio(best_results,lines,line_ratio_constraints)
         for i in range(ntrack) :
             best_results[i]["CHI2"] = best_results[i]["CHI2"] + chi2_of_ratios[i]
-
+    
+    # if we have line_ratio_pca_prior, add it to chi2
+    if line_ratio_pca_prior is not None : 
+        chi2_of_ratios=chi2_of_line_ratio_pca_prior(best_results,lines,line_ratio_pca_prior)
+        for i in range(ntrack) :
+            best_results[i]["CHI2"] = best_results[i]["CHI2"] + chi2_of_ratios[i]
     
     # now that we have added priors,
     # order results if it turns out that the ranking has been modified by the improved fit
@@ -934,7 +1025,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
         
     log.debug("After priors :")
     for i in range(ntrack) :
-        log.debug("rank #%d z=%f chi2=%f dchi2=%f"%(i,best_results[i]["Z"],best_results[i]["CHI2"],best_results[i]["CHI2"]-best_results[0]["CHI2"]))
+        log.debug("rank #%d z=%f chi2=%f dchi2=%f snr=%f"%(i,best_results[i]["Z"],best_results[i]["CHI2"],best_results[i]["CHI2"]-best_results[0]["CHI2"],best_results[i]["SNR"]))
     
 
     labels=np.array(["BEST","SECOND","THIRD"]) # I know it's a bit ridiculous
