@@ -24,6 +24,8 @@ def main() :
     # find list of lines from table keywords
     keys=hdulist[1].columns.names
     table=hdulist[1].data
+    ok=np.where(table["ZWARN"]==0)[0]
+    table=table[ok]
     
     lines=[]
     for k in keys :
