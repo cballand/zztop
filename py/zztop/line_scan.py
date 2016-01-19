@@ -545,6 +545,8 @@ def chi2_of_line_ratio_pca_prior(list_of_results,lines,line_ratio_pca_prior) :
     pca_components=np.array(line_ratio_pca_prior["components"])
     pca_mean_coef=np.array(line_ratio_pca_prior["mean_coef"])
     pca_rms_coef=np.array(line_ratio_pca_prior["rms_coef"])
+    pca_min_coef=np.array(line_ratio_pca_prior["min_coef"])
+    pca_max_coef=np.array(line_ratio_pca_prior["max_coef"])
     
 
     for res_index,result in zip(range(nres),list_of_results) :
@@ -576,7 +578,28 @@ def chi2_of_line_ratio_pca_prior(list_of_results,lines,line_ratio_pca_prior) :
         #pylab.errorbar(pca_lines[ivar>0],flux[ivar>0],1./np.sqrt(ivar[ivar>0]),fmt="o",c="b")
         #pylab.plot(pca_lines,pca_mean_flux,"o",c="r")
         #pylab.show()
+
+        nc=pca_components.shape[0]
+        A=np.zeros((nc,nc))
+        B=np.zeros((nc))
+
+        for i in range(nc) :
+            B[i]=np.sum(ivar*pca_components[i]*residuals)
+            for j in range(nc) :
+                A[i,j]=np.sum(ivar*pca_components[i]*pca_components[j])
+            # add weak prior to invert
+            A[i,i] += 0.0001
+        try :
+            coefs,cov=cholesky_solve_and_invert(A,B)
+            for i in range(nc) :
+                coef_chi2 = (coefs[i]-pca_mean_coef[i])**2/(cov[i,i]+pca_rms_coef[i]**2)+(coefs[i]>pca_max_coef[i])*(coefs[i]-pca_max_coef[i])**2/cov[i,i]+(coefs[i]<pca_min_coef[i])*(coefs[i]-pca_min_coef[i])**2/cov[i,i]
+                #log.debug("comp #%d meas coef=%f +- %f chi2=%f"%(i,coef,1./math.sqrt(coef_ivar),coef_chi2))
+                chi2[res_index] += coef_chi2
+        except :
+            log.warning("cholesky failed")
+            return 1000.
         
+        """
         # loop on pca components
         for i in range(pca_components.shape[0]) :
             # compute pca coefs  
@@ -589,7 +612,9 @@ def chi2_of_line_ratio_pca_prior(list_of_results,lines,line_ratio_pca_prior) :
             
             #log.debug("comp #%d meas coef=%f +- %f chi2=%f"%(i,coef,1./math.sqrt(coef_ivar),coef_chi2))
             chi2[res_index] += coef_chi2
+        """        
         log.debug("res #%d line_ratio_pca_prior chi2=%f"%(res_index,chi2[res_index]))
+    
     return chi2
     
 

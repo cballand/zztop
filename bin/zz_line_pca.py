@@ -6,7 +6,7 @@ import numpy as np
 import re
 import string
 import sys
-
+from desispec.linalg import cholesky_solve
 from desispec.log import get_logger
 
 def main() :
@@ -108,6 +108,7 @@ def main() :
     mean = np.sum(ivar*flux,axis=0)/a
     
     residuals=flux-mean
+    tmpres=residuals.copy()
     
     # now we can try to do some sort of npca
     eigenvectors=np.zeros((lines.size,lines.size))
@@ -115,37 +116,91 @@ def main() :
     
     bb=np.zeros((lines.size))
     aa=np.zeros((lines.size))
-    
+    chi2=1e20
     for e in range(lines.size) :
-        i=np.argmax(np.std(residuals,axis=0))
+        
         eigenvectors[e]=np.ones(lines.size) # 
+        eigenvectors[e] /= np.sqrt(np.sum(eigenvectors[e]**2))
+
+        # orthogonalize         
+        for i in range(e) :
+            prod=np.inner(eigenvectors[e],eigenvectors[i])
+            eigenvectors[e] -= eigenvectors[i]
+        # normalize
         eigenvectors[e]  /= np.sqrt(np.sum(eigenvectors[e]**2))
         
-        for loop in range(100) :            
-            a=np.sum(ivar*eigenvectors[e]**2,axis=1)
-            b=np.sum(ivar*eigenvectors[e]*residuals,axis=1)
-            coefs[:,e]=b/(a+(a==0))
-            aa *= 0.
-            bb *= 0.            
-            for i in range(lines.size) : 
-                bb[i]=np.sum(ivar[:,i]*coefs[:,e]*residuals[:,i])
-                aa[i]=np.sum(ivar[:,i]*coefs[:,e]**2)
-            newvect=bb/aa
-
-            # orthogonalize         
-            for i in range(e) :
-                prod=np.inner(newvect,eigenvectors[i])
-                newvect -= eigenvectors[i]
-            # normalize
-            newvect /= np.sqrt(np.sum(newvect**2))
-                        
-            dist=np.max(np.abs(newvect-eigenvectors[e]))
-            eigenvectors[e]=newvect
-            if dist<1e-6 :
-                break
-        for i in range(lines.size) : 
-            residuals[:,i] -= coefs[:,e]*eigenvectors[e,i]
+        A=np.zeros((e+1,e+1)).astype(float)
+        B=np.zeros((e+1)).astype(float)
         
+        for loop in range(500) :
+            # refit coordinates, including previous ones
+            for g in range(ngal) :
+                #log.debug("%d/%d"%(g,ngal))
+                A *= 0.
+                B *= 0.
+                for i in range(e+1) :
+                    B[i]=np.sum(ivar[g]*eigenvectors[i]*residuals[g])
+                    for j in range(e+1) :
+                        A[i,j]=np.sum(ivar[g]*eigenvectors[i]*eigenvectors[j])
+                    A[i,i] += 0.00001 # weak prior
+                try :
+                    coefs[g,:e+1]=cholesky_solve(A,B)
+                except :
+                    log.warning("cholesky_solve error")
+                    print "A=",A
+                    print "B=",B
+                    print "ivar=",ivar[g]
+                    print "eigenvectors[e]=",eigenvectors[e]
+                    sys.exit(12)
+                    log.warning(sys.exc_info())
+                    coefs[g]=0.
+                    pass
+                # update residuals
+                tmpres[g] = residuals[g]
+                for i in range(e) :
+                    tmpres[g] -= coefs[g,i]*eigenvectors[i]
+            
+            old=eigenvectors[e].copy()
+            
+            # refit this eigen vectors
+            #tmpres = residuals.copy()
+            for i in [e] : #range(e+1) :
+                aa *= 0.
+                bb *= 0.            
+                for l in range(lines.size) : 
+                    bb[l]=np.sum(ivar[:,l]*coefs[:,i]*tmpres[:,l])
+                    aa[l]=np.sum(ivar[:,l]*coefs[:,i]**2)
+                newvect=(aa>0)*bb/(aa+(aa==0))
+                        
+                
+                # orthogonalize         
+                for j in range(i) :
+                    prod=np.inner(newvect,eigenvectors[j])
+                    newvect -= prod*eigenvectors[j]
+                    coefs[:,j] += prod*coefs[:,i]
+                    for g in range(ngal) :
+                        tmpres[g] -= prod*coefs[g,i]*eigenvectors[j]
+                # normalize
+                norme = np.sqrt(np.sum(newvect**2))
+                newvect /= norme
+                coefs[:,i] *= norme
+                
+                eigenvectors[i]=newvect
+                
+                # update tmpres
+                for g in range(ngal) :
+                    tmpres[g] -= coefs[g,i]*eigenvectors[i]
+            
+            oldchi2=chi2
+            chi2=np.sum(ivar*tmpres**2)
+            ndf=np.sum(ivar>0)-(e+1)
+            dchi2=oldchi2-chi2
+            dist=np.max(np.abs(old-eigenvectors[e]))
+            if dist<1e-4 or dchi2<1. :
+                break
+            for i in [e] : #range(e+1) :
+                log.info("#%d-%d chi2=%f chi2/ndf=%f dchi2=%f %s"%(i,loop,chi2,chi2/ndf,dchi2,str(eigenvectors[i])))
+    
     file=open(args.outfile,"w")
     file.write('"pca":{\n')
     file.write('"lines": [')
@@ -184,6 +239,18 @@ def main() :
         if e>0 :
             file.write(",")
         file.write("%f"%np.std(coefs[:,e]))
+    file.write('],\n')
+    file.write('"min_coef": [')
+    for e in range(eigenvectors.shape[0]) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.min(coefs[:,e]))
+    file.write('],\n')
+    file.write('"max_coef": [')
+    for e in range(eigenvectors.shape[0]) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.max(coefs[:,e]))
     file.write(']\n')
     file.write('}\n')
     
