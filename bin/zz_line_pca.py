@@ -69,6 +69,14 @@ def main() :
         var += (flux[:,i]*oIIerr[selection]/oIIflux[selection])**2        
         mask=np.where(var>0)[0]
         ivar[mask,i]=1./var[mask]
+
+    # test : do not weight with ivar because redshift dependence blurs the picture
+    no_weight = True
+
+    if no_weight :
+        ivar=(ivar>0)/(0.001)**2
+    
+
     
     # this is the mean line ratios
     sivar=np.sum(ivar,axis=0)
@@ -91,6 +99,9 @@ def main() :
         ok=np.where(var>0)[0]
         ivar[ok,i]=1./var[ok]
     
+    if no_weight :
+        ivar=(ivar>0)/(0.001)**2
+        
     # for each gal, fit scale and apply it
     a=np.sum(ivar*mean_flux_wrt_oII**2,axis=1)
     b=np.sum(ivar*mean_flux_wrt_oII*flux,axis=1)
@@ -104,7 +115,9 @@ def main() :
             flux[i]=0.
             ivar[i]=0.
 
-    
+    dchi2min=1.
+    if no_weight :
+        ivar=(ivar>0)/(0.001)**2
     
     a    = np.sum(ivar,axis=0)
     mean = np.sum(ivar*flux,axis=0)/a
@@ -112,7 +125,7 @@ def main() :
     residuals=flux-mean
     tmpres=residuals.copy()
     
-    # now we can try to do some sort of npca
+    # now we can try to do some sort of pca
     eigenvectors=np.zeros((lines.size,lines.size))
     coefs=np.zeros((ngal,lines.size))
     
@@ -198,11 +211,13 @@ def main() :
             ndf=np.sum(ivar>0)-(e+1)
             dchi2=oldchi2-chi2
             dist=np.max(np.abs(old-eigenvectors[e]))
-            if dist<1e-4 or dchi2<1. :
+            if dist<1e-4 or dchi2<dchi2min :
                 break
             for i in [e] : #range(e+1) :
                 log.info("#%d-%d chi2=%f chi2/ndf=%f dchi2=%f %s"%(i,loop,chi2,chi2/ndf,dchi2,str(eigenvectors[i])))
     
+    fits.writeto("coefs.fits",coefs,clobber=True)
+    log.info("wrote coefs.fits")
     file=open(args.outfile,"w")
     file.write('"pca":{\n')
     file.write('"lines": [')
