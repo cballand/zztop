@@ -8,6 +8,12 @@ import math
 import sys
 import time
 
+from operator import mul    # or mul=lambda x,y:x*y                                                                                                                                                      
+from fractions import Fraction
+
+def nCk(n,k):
+    return int( reduce(mul, (Fraction(n-i, i+1) for i in range(k)), 1) )
+
 def find_groups(lines,restframe_sigmas,resolution_sigma=1.,nsig=5.) :
     """
     internal routine : find group of lines that we have to fit together because they overlap
@@ -618,6 +624,88 @@ def chi2_of_line_ratio_pca_prior(list_of_results,lines,line_ratio_pca_prior) :
     return chi2
     
 
+def chi2_of_pca_on_line_ratios(list_of_results,lines,pca_on_line_ratios) :
+    nres=len(list_of_results)
+    chi2=np.zeros((nres))
+    log=get_logger()
+    refchi2=list_of_results[0]["CHI2"]
+    log.debug("starting")
+
+
+    pca_lines=np.array(pca_on_line_ratios["lines"])
+    log.debug("lines of prior = %s"%pca_lines)
+
+
+    pca_mean_flux_ratios=np.array(pca_on_line_ratios["mean_flux_ratios"])
+    pca_components=np.array(pca_on_line_ratios["components"])
+    pca_mean_coef=np.array(pca_on_line_ratios["mean_coef"])
+    pca_rms_coef=np.array(pca_on_line_ratios["rms_coef"])
+    pca_min_coef=np.array(pca_on_line_ratios["min_coef"])
+    pca_max_coef=np.array(pca_on_line_ratios["max_coef"])
+
+    for res_index,result in zip(range(nres),list_of_results) :
+        #print 'result:',result
+        # line flux ratios                                                                                                                                                                              
+        flux_ratios=np.zeros((nCk(len(pca_lines),2)))
+        ivar=np.zeros((nCk(len(pca_lines),2)))
+        i=0
+        for l in range(len(pca_lines)):
+            for m in [x+l+1 for x in range(len(pca_lines)-(l+1))]:
+                line=result['FLUX_%dA'%pca_lines[l]]
+                line_next=result['FLUX_%dA'%pca_lines[m]]
+                if (line_next <=0):
+                    continue
+                flux_ratios[i]=result['FLUX_%dA'%pca_lines[l]]/result['FLUX_%dA'%pca_lines[m]]
+                sig_f1=result["FLUX_ERR_%dA"%pca_lines[l]]
+                sig_f2=result["FLUX_ERR_%dA"%pca_lines[m]]
+                if sig_f1<=0 or sig_f2<=0:
+                    continue
+                ivar[i]=(result['FLUX_%dA'%pca_lines[m]]**2)/(sig_f1**2+(flux_ratios[i])**2*sig_f2**2)
+                i=i+1
+        
+        # scale according to pca mean flux                                                                                                                                                    
+        a=np.sum(ivar*pca_mean_flux_ratios**2)
+        if a==0 :
+            log.warning("cannot compute pca prior for result #%d because null ivar"%res_index)
+            continue
+        scale=np.sum(ivar*flux_ratios*pca_mean_flux_ratios)/a
+        if scale<=0 :
+            log.warning("cannot compute pca prior for result #%d because scale=%f"%(res_index,scale))
+            #log.warning("results = %s"%str(result))
+            continue
+        flux_ratios /= scale
+        ivar *= scale**2
+        
+
+        residuals = flux_ratios-pca_mean_flux_ratios
+        residuals[ivar==0]=0.
+
+
+        nc=pca_components.shape[0]
+        A=np.zeros((nc,nc))
+        B=np.zeros((nc))
+
+        for i in range(nc) :
+            B[i]=np.sum(ivar*pca_components[i]*residuals)
+            for j in range(nc) :
+                A[i,j]=np.sum(ivar*pca_components[i]*pca_components[j])
+            # add weak prior to invert
+            A[i,i] += 0.0001
+        try :
+            coefs,cov=cholesky_solve_and_invert(A,B)
+            for i in range(nc) :
+                coef_chi2 = (coefs[i]-pca_mean_coef[i])**2/(cov[i,i]+pca_rms_coef[i]**2)+(coefs[i]>pca_max_coef[i])*(coefs[i]-pca_max_coef[i])**2/cov[i,i]+(coefs[i]<pca_min_coef[i])*(coefs[i]-pca_min_coef[i])**2/cov[i,i]
+                #log.debug("comp #%d meas coef=%f +- %f chi2=%f"%(i,coef,1./math.sqrt(coef_ivar),coef_chi2))
+                chi2[res_index] += coef_chi2
+        except :
+            log.warning("cholesky failed")
+            return 1000.
+
+        log.debug("res #%d line_ratio_pca_prior chi2=%f"%(res_index,chi2[res_index]))
+
+    return chi2
+
+
 def chi2_of_line_ratio(list_of_results,lines,line_ratio_constraints) :
         
     nres=len(list_of_results)
@@ -732,7 +820,7 @@ def zz_set_warning(results,lines,zwarn_min_dchi2=None,zwarn_min_total_snr=None,z
     zwarn = 0 + int(ok==False)
     return zwarn
 
-def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_range=2000.,ntrack=3,remove_continuum=True,recursive=True,targetid=0,vdisp_min=1.,vdisp_max=500.,vdisp_prior_mean=None,vdisp_prior_rms=None,zwarn_min_dchi2=None,zwarn_min_total_snr=None,zwarn_min_number_of_significant_lines=None,zwarn_min_line_snr=None,zwarn_min_oII_snr=None,oII_min_flux_prior=None,line_ratio_pca_prior=None) :
+def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,line_ratio_constraints=None,fixed_line_ratio=None,zstep=0.001,zmin=0.,zmax=100.,wave_range=2000.,ntrack=3,remove_continuum=True,recursive=True,targetid=0,vdisp_min=1.,vdisp_max=500.,vdisp_prior_mean=None,vdisp_prior_rms=None,zwarn_min_dchi2=None,zwarn_min_total_snr=None,zwarn_min_number_of_significant_lines=None,zwarn_min_line_snr=None,zwarn_min_oII_snr=None,oII_min_flux_prior=None,line_ratio_pca_prior=None,pca_on_line_ratios=None) :
 
     """
     args :
@@ -1031,6 +1119,11 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     # if we have line_ratio_pca_prior, add it to chi2
     if line_ratio_pca_prior is not None : 
         chi2_of_ratios=chi2_of_line_ratio_pca_prior(best_results,lines,line_ratio_pca_prior)
+        for i in range(ntrack) :
+            best_results[i]["CHI2"] = best_results[i]["CHI2"] + chi2_of_ratios[i]
+
+    if pca_on_line_ratios is not None:
+        chi2_of_ratios=chi2_of_pca_on_line_ratios(best_results,lines,pca_on_line_ratios)
         for i in range(ntrack) :
             best_results[i]["CHI2"] = best_results[i]["CHI2"] + chi2_of_ratios[i]
     

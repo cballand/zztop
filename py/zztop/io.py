@@ -10,7 +10,7 @@ from astropy.io import fits
 from desispec.log import get_logger
 import sys
 
-def write_zbest(filename, brickname, zztop_results, truth_table_hdu=None):
+def write_zbest(filename, brickname, objtype, zztop_results, truth_table_hdu=None):
     """Writes zztop output to ``filename``.
 
     Args:
@@ -41,6 +41,7 @@ def write_zbest(filename, brickname, zztop_results, truth_table_hdu=None):
     # target ID and ZWARN are already in zztop results
         
     # need to fill TYPE and SUBTYPE
+    data['TYPE']     =objtype
 
     # add zztop results
     for k in zztop_results.dtype.names :

@@ -58,8 +58,10 @@ def main() :
     z_brick=Brick(args.z)
     brickname = args.b
     
-    elg_spectra=np.where(b_brick.hdu_list['_TRUTH'].data["OBJTYPE"][args.first:]=="ELG")[0]+args.first
-    
+#    elg_spectra=np.where(b_brick.hdu_list['_TRUTH'].data["OBJTYPE"][args.first:]=="ELG")[0]+args.first
+    elg_spectra = np.array(range(b_brick.hdu_list['FIBERMAP'].data.size))
+#    print elg_spectra
+   
     #########################################
     ## fit parameters are in config file
     #########################################
@@ -93,7 +95,8 @@ def main() :
         nspec=elg_spectra.size
         
     elg_spectra=elg_spectra[:nspec]
-    alltargetids = np.array(b_brick.get_target_ids())
+#    alltargetids = np.array(b_brick.get_target_ids())
+    alltargetids = b_hdulist['FIBERMAP'].data['TARGETID']
     targetids = alltargetids[elg_spectra]
     
     log.info("will fit %d spectra"%nspec)
@@ -166,7 +169,8 @@ def main() :
         for key in result.keys() :
             formatted_results[key][i]=result[key]
     
-    io.write_zbest(args.outfile,brickname,formatted_results,truth_table_hdu)
+    objtype='ELG'
+    io.write_zbest(args.outfile,brickname,objtype,formatted_results,truth_table_hdu)
     log.info("wrote %s"%args.outfile)
     log.info("the end")
     
