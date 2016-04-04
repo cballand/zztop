@@ -1,0 +1,252 @@
+#!/usr/bin/env python
+
+from desispec.log import get_logger
+from desispec.io.brick import Brick
+from desispec.resolution import Resolution
+from desispec.io.util import native_endian
+
+import argparse
+import numpy as np
+import sys
+import math
+from astropy.io import fits
+import zztop
+from zztop.line_scan import zz_line_scan
+import zztop.io as io
+import multiprocessing
+import json
+import os.path
+import linalg
+
+from operator import mul    # or mul=lambda x,y:x*y
+from fractions import Fraction
+
+def intersection(first, others):
+    return set(first).intersection(*others)
+
+def nCk(n,k): 
+    return int( reduce(mul, (Fraction(n-i, i+1) for i in range(k)), 1) )
+
+def main() :
+
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument('--f', type = str, default = None, required=True,
+                        help = 'path of ZZTOP best fit file')
+    parser.add_argument('--outfile', type = str, default = None, required=True,
+                        help = 'path of output file')
+    parser.add_argument('--nspec', type = int, default = None, required=False,
+                        help = 'max number of spectra to fit')
+    parser.add_argument('--debug', type = bool, default = False, required=False,
+                    help = 'debug')
+    parser.add_argument('--show', type = bool, default = False, required=False,
+                    help = 'show plots')    
+
+    args = parser.parse_args()
+    log=get_logger()
+    nspec=args.nspec
+
+    log.info("starting")
+    
+    show=args.show
+    debug=args.debug
+    truth_table_hdu=None
+    try :
+        zzb_hdulist = fits.open(args.f)
+        zbest = zzb_hdulist["ZBEST"]
+        truth_table_hdu = zzb_hdulist["_TRUTH"]
+        log.info("args.f has truth table")
+    except KeyError :
+        truth_table_hdu=None
+
+    # Define cCk(6,2) ratios among 6 lines (1: OII(3727), 2: OII(3729), 3: Hbeta(4862), 4: OIII(4960), 5: OIII(5008), 6: Haplha(6564)
+    lines = [3727.092,3729.875,4862.708,4960.295,5008.240]
+    lines = [3727.092,3729.875,4102.892,4341.684,4862.708,4960.295,5008.240,6564.603]
+    lines = [3188.662,3727.092,3729.875,3971.195,4102.892,4341.684,4862.708,4960.295,5008.240,6564.603]
+    flux = dict()
+    flux_err = dict()
+    others=[]
+    for line in lines:
+        flux['BEST_FLUX_%dA'%(int(line))]=zbest.data["BEST_FLUX_%dA"%(int(line))]    
+        flux_err['BEST_FLUX_ERR_%dA'%(int(line))]=zbest.data["BEST_FLUX_ERR_%dA"%(int(line))]
+    # Search spectra for which all five lines are measured and build index list
+        if (int(line) == 3727):
+            continue
+        else:
+            others.append(np.where(flux['BEST_FLUX_%dA'%int(line)])[0])
+    
+    index = list(intersection(set(np.where(flux['BEST_FLUX_3727A'])[0]),others))
+    index.sort()
+
+    log.info("%d spectra have measurements for all %d lines"%(len(index),len(lines)))
+
+    # Computes matrix of line ratios
+
+    A = np.zeros(( len(index),nCk(len(lines),2) ))
+#    print 'A.size=%s, A.shape=%s: '%(A.size,A.shape)
+
+    for k,i in zip(index,range(len(index))):
+        j=0
+        for l in range(len(lines)):
+            for m in [x+l+1 for x in range(len(lines)-(l+1))]:
+                A[i,j]=flux['BEST_FLUX_%dA'%(int(lines[l]))][k]/flux['BEST_FLUX_%dA'%(int(lines[m]))][k]
+                j=j+1
+    log.info("Matrix A of shape (%s,%s) filled"%(A.shape))
+
+    if (debug):    
+        print 'index[600]=',index[600]
+        print 'A=',A[600:602,[j for j in range(nCk(len(lines),2))]] 
+
+    # computes matrix of mean values for each ratio
+    B=np.mean(A,axis=0)
+
+    # Center A on barycenter
+    D=np.subtract(A,B)
+
+    if(debug):
+        print 'B=',B
+        print 'B.shape=',B.shape
+        print 'D=A-B=',D
+        print 'D.shape:',D.shape
+        print 'mean(D):',np.mean(D,axis=0)
+
+    # computes covariance matrix
+    cov_mat=np.cov(D.T)
+
+    if(debug):
+        print 'cov_mat=',cov_mat
+        print 'cov_mat_shape:',cov_mat.shape
+        log.info("Checking cov matrix calculation")
+        C=np.dot(D.T,D)/(len(index)-1)
+        print 'C=',C
+        print 'C.shape:',C.shape
+        print (C==cov_mat).all()
+
+    # computes eigen values and vectors
+    eig_val, eig_vect = np.linalg.eig(cov_mat)
+
+    eig_pairs = [(np.abs(eig_val[i]), eig_vect[:,i])
+             for i in range(len(eig_val))]
+
+    # Print to confirm that the list is correctly sorted by decreasing eigenvalues
+    sum_val = np.sum(eig_val,axis=0)
+    for i in eig_pairs:
+        print(i[0],i[0]/sum_val)
+        print(i[1])
+
+    if(debug):
+        # Check orthogonality
+        for i in range(eig_vect.shape[0]):
+            for j in range(eig_vect.shape[0]):
+                dotprod = np.dot(eig_vect[i],eig_vect[j].T)
+                print 'scalar prod %s,%s: %s'%(i,j,dotprod)                                      
+        # Check norm
+        for i in range(eig_vect.shape[0]):
+            norm = np.sqrt(np.sum([np.power(eig_vect[i][j],2) for j in range(len(eig_vect[i]))]))
+            print 'Norm=%s'%norm
+
+    import pylab as pl
+
+    if(show):
+        pl.plot(range(len(eig_val)),eig_val,'bo-')
+        pl.show()
+
+    # Build rotation matrix. Keep only pca_dim PCA components
+    pca_dim=eig_vect.shape[0]
+    W = np.hstack([eig_pairs[i][1].reshape(len(eig_vect),1) for i in range(pca_dim)])
+
+    coef = D.dot(W)
+    if(debug):
+        print 'D.shape:',D.shape
+        print 'W.shape:',W.shape
+        print 'coef.shape:',coef.shape
+    assert coef.shape == (len(index),pca_dim), "The matrix is not %sx%s dimensional."%(len(index),pca_dim)
+
+    if(debug):
+        print 'W=',W, W.shape
+        print 'coef=',coef, coef.shape
+
+    if(show):
+        pl.figure(1)
+        pl.subplot(311)
+        pl.plot(coef[:,0],coef[:,1],'bo')
+        pl.xlabel("PCA1")
+        pl.ylabel("PCA2")
+        
+        pl.subplot(312)
+        pl.plot(coef[:,0],coef[:,2],'ro')
+        pl.xlabel("PCA1")
+        pl.ylabel("PCA3")
+        
+        pl.subplot(313)
+        pl.plot(coef[:,1],coef[:,2],'go')
+        pl.xlabel("PCA2")
+        pl.ylabel("PCA3")
+        
+        pl.show()
+
+
+    file=open(args.outfile,"w")
+    file.write('"pca_on_line_ratios":{\n')
+    file.write('"lines": [')
+    for l in lines :
+        if l != lines[0] :
+            file.write(",")
+        file.write("%d"%l)
+    file.write('],\n')
+    file.write('"mean_flux_ratios": [')
+    for  e in range(eig_vect.shape[0]) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.mean(A,axis=0)[e])
+    file.write('],\n')
+
+    
+    file.write('"components": [\n')
+    for e in range(eig_vect.shape[0]) :
+        file.write('[')
+        for i in range(eig_vect.shape[1]) :
+            if i>0 :
+                file.write(",")
+            file.write("%f"%eig_vect[i,e])
+        if e<eig_vect.shape[0]-1 :
+            file.write('],\n')
+        else :
+            file.write(']\n')
+    file.write('],\n')
+    
+    file.write('"mean_coef": [')
+    for e in range(pca_dim) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.mean(coef[:,e],axis=0))
+    file.write('],\n')
+    
+    file.write('"rms_coef": [')
+    for e in range(pca_dim) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.std(coef[:,e]))
+    file.write('],\n')
+    
+    file.write('"min_coef": [')
+    for e in range(pca_dim) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.min(coef[:,e]))
+    file.write('],\n')
+    
+    file.write('"max_coef": [')
+    for e in range(pca_dim) :
+        if e>0 :
+            file.write(",")
+        file.write("%f"%np.max(coef[:,e]))
+    file.write(']\n')
+    file.write('}\n')
+
+       
+    file.close()
+    log.info("wrote %s"%args.outfile)
+
+if __name__ == '__main__':
+    main()
