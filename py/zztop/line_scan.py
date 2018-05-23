@@ -1,4 +1,4 @@
-from desispec.log import get_logger
+from desiutil.log import get_logger
 from desispec.linalg import cholesky_solve
 from desispec.linalg import cholesky_solve_and_invert
 
@@ -480,7 +480,7 @@ def zz_fit_vdisp(wave,flux,ivar,resolution,lines,vdisp_min,vdisp_max,line_ratio_
         c=tc.copy()
         a=ta.copy()
         w=tw.copy()
-    print "error in zz_fit_vdisp"
+    print ("error in zz_fit_vdisp")
     return c[0],a[0],w[0],v[0],1000.
 
 def zz_fit_z(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z_min,z_max,wave_range,x,gx,groups,fixed_line_ratio=None) :
@@ -531,7 +531,7 @@ def zz_fit_z(wave,flux,ivar,resolution,lines,vdisp,line_ratio_priors,z_min,z_max
         c=tc.copy()
         a=ta.copy()
         w=tw.copy()
-    print "error in zz_fit_z"
+    print ("error in zz_fit_z")
     zbest,err,dchi2 = tracker.find_best(ntrack=1,min_delta_z=0)
     return dchi2[0],am,wm,zbest[0],err[0]
 
@@ -901,7 +901,6 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     log=get_logger()
     
     nframes=len(wave)
-    
 
     ndata=0
     for index in range(nframes) :
@@ -909,6 +908,18 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     
     if ndata<2 :
         log.warning("ndata=%d skip this spectrum")
+        return None,None
+
+    # checks for 0 flux spectra                                                                                                                                                                        
+##    if (np.all(flux[0]==0) & np.all(flux[1]==0)):
+    if (np.all(flux[0]==0)):
+        print ("Spec {:d} has zero flux spectrum. Skip this spectrum".format(targetid))
+        return None,None
+
+    # checks for 0 ivar spectra
+#    if (np.all(ivar[0]==0) & np.all(ivar[1]==0)):
+    if (np.all(ivar[0]==0)):
+        print ("Spec {:d} has zero ivar spectrum. Skip this spectrum".format(targetid))
         return None,None
 
     # type conversion
@@ -940,7 +951,11 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
     for index in range(nframes) :
         frame_wave=wave[index]
         frame_ivar=ivar[index]
+        if (np.all(frame_ivar<=0)):
+            return None,None
          # define z range
+#        print (np.all(frame_ivar<=0))
+#        print (frame_wave[frame_ivar>0])
         wmin=np.min(frame_wave[frame_ivar>0])
         wmax=np.max(frame_wave[frame_ivar>0])        
         zrange[index,0]=wmin/lmax-1
@@ -948,10 +963,10 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
         log.debug("frame #%d z range to scan=%f %f"%(index,zrange[index,0],zrange[index,1]))
         
     
-    zmin=max(zmin,np.min(zrange[:,0]))
-    zmax=min(zmax,np.max(zrange[:,1]))
+#    zmin=max(zmin,np.min(zrange[:,0]))
+#    zmax=min(zmax,np.max(zrange[:,1]))
     
-    log.debug("zmin=%f zmax=%f zstep=%f"%(zmin,zmax,zstep))
+#    log.debug("zmin=%f zmax=%f zstep=%f"%(zmin,zmax,zstep))
     
     
     # compute one highres gaussian to go faster and not call exp() after
@@ -978,6 +993,7 @@ def zz_line_scan(wave,flux,ivar,resolution,lines,vdisps,line_ratio_priors=None,l
 
     # redshift scan
     best_chi2 = 0
+#    print (zmin, zmax)
     for z in np.linspace(zmin,zmax,num=int((zmax-zmin)/zstep+1)) :
 
         # the whole fit happens here

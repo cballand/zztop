@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 
-from desispec.log import get_logger
-from desispec.io.brick import Brick
+from desiutil.log import get_logger
 from desispec.resolution import Resolution
 from desispec.io.util import native_endian
+
+import redrock.external.boss
 
 import argparse
 import numpy as np
@@ -16,6 +17,7 @@ import zztop.io as io
 import multiprocessing
 import json
 import os.path
+import h5py
 
 def _func(arg) :
     return zz_line_scan(**arg)
@@ -24,12 +26,8 @@ def main() :
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('--b', type = str, default = None, required=True,
-                        help = 'path of DESI brick in b')
-    parser.add_argument('--r', type = str, default = None, required=True,
-                        help = 'path of DESI brick in r')
-    parser.add_argument('--z', type = str, default = None, required=True,
-                        help = 'path of DESI brick in z')
+    parser.add_argument('--spPlate', type = str, default = None, required=True,
+                        help = 'path to BOSS spPlate')
     parser.add_argument('--outfile', type = str, default = None, required=True,
                         help = 'path of output file')
     parser.add_argument('--nspec', type = int, default = None, required=False,
@@ -44,6 +42,8 @@ def main() :
                         help = 'configuration file')
     parser.add_argument('--type', type = str, default = "ELG", required=False,
                         help = 'configuration file')
+    parser.add_argument('--prior_file', type = str, default = None, required=False,
+                    help = 'prior info on redshift file')
     
     
     args = parser.parse_args()
@@ -52,15 +52,11 @@ def main() :
     log.info("starting")
 
     
+    spplate_file = args.spPlate
 
-    b_brick=Brick(args.b)
-    r_brick=Brick(args.r)
-    z_brick=Brick(args.z)
-    brickname = args.b
-    
-#    elg_spectra=np.where(b_brick.hdu_list['_TRUTH'].data["OBJTYPE"][args.first:]=="ELG")[0]+args.first
-    elg_spectra = np.array(range(b_brick.hdu_list['FIBERMAP'].data.size))
-#    print elg_spectra
+    spect = redrock.external.boss.read_spectra(spplate_file)
+
+    elg_spectra = np.array(range(len(spect[0])))
    
     #########################################
     ## fit parameters are in config file
@@ -76,14 +72,14 @@ def main() :
         parameters=data["zztop"][args.type]
     except :
         log.error("error when parsing json file:")
-        print sys.exc_info()
+        print (sys.exc_info())
         sys.exit(12)
         
     results=None
 
     truth_table_hdu=None
     try :
-        b_hdulist = fits.open(args.b)
+        b_hdulist = fits.open(args.spPlate)
         truth_table_hdu=b_hdulist["_TRUTH"]
         log.info("brick has truth table")
     except KeyError :
@@ -95,31 +91,42 @@ def main() :
         nspec=elg_spectra.size
         
     elg_spectra=elg_spectra[:nspec]
-#    alltargetids = np.array(b_brick.get_target_ids())
-    alltargetids = b_hdulist['FIBERMAP'].data['TARGETID']
+    alltargetids = spect[1][0][:]
     targetids = alltargetids[elg_spectra]
     
     log.info("will fit %d spectra"%nspec)
     
     func_args = []
-        
+
         
     for spec,s in zip(elg_spectra,range(nspec)) :
 
         targetid=targetids[s]
-        flux=[b_brick.hdu_list[0].data[spec],r_brick.hdu_list[0].data[spec],z_brick.hdu_list[0].data[spec]]
-        ivar=[b_brick.hdu_list[1].data[spec],r_brick.hdu_list[1].data[spec],z_brick.hdu_list[1].data[spec]]
-        wave=[b_brick.hdu_list[2].data,r_brick.hdu_list[2].data,z_brick.hdu_list[2].data]    
-        resolution=[Resolution(native_endian(b_brick.hdu_list[3].data[spec])),Resolution(native_endian(r_brick.hdu_list[3].data[spec])),Resolution(native_endian(z_brick.hdu_list[3].data[spec]))]
-        
+
+        wave = [spect[0][spec].spectra[0].wave]
+        flux = [spect[0][spec].spectra[0].flux]
+        ivar = [spect[0][spec].spectra[0].ivar]
+        resolution = [spect[0][spec].spectra[0].R]
+
         arguments={"targetid":targetid, "wave":wave,
                            "flux":flux,"ivar":ivar,"resolution":resolution}
         
         # add fit parameters found in configuration file
         for k in parameters :
-            arguments[k]=parameters[k]
-                
-        
+            arguments[k]=parameters[k]                
+
+        # if prior information on redshift (e.g., from another fitter), define new redshift range for fit
+        if (args.prior_file):
+            # Read redshift from file
+            prior_info = h5py.File(args.prior_file,'r')
+            zbest = prior_info['/zbest']
+            ind, = np.where(zbest['TARGETID']==targetid)
+            prior_z = zbest['Z'][ind]
+            arguments["zmin"]=max(0.,prior_z-0.05)
+            arguments["zmax"]=prior_z+0.05
+#            print (targetid,prior_z)
+
+
         # for tests
         if args.use_truth :
             arguments["flux"]=[b_brick.hdu_list["_TRUEFLUX"].data[spec],r_brick.hdu_list["_TRUEFLUX"].data[spec],z_brick.hdu_list["_TRUEFLUX"].data[spec]]
@@ -139,6 +146,7 @@ def main() :
     if args.ncpu==1 : # simple loop
         
         for arg,spec in zip(func_args,elg_spectra) :
+            targetid=targetids[spec]
             result = zz_line_scan(**arg)
             results.append(result)
             
@@ -152,7 +160,6 @@ def main() :
         pool = multiprocessing.Pool(args.ncpu)
         results =  pool.map(_func, func_args)
         
-    
     # reformat results matching initial target ids (multiprocessing shuffles the results)
     dtype = list()
     for key in results[0].keys() :
@@ -163,14 +170,23 @@ def main() :
         else :
             dtype.append( (key, np.float32) )
     formatted_results = np.empty(len(results), dtype=dtype)
-        
-    for result in results :
-        i=np.where(targetids==result["TARGETID"])[0][0]
-        for key in result.keys() :
-            formatted_results[key][i]=result[key]
     
+    index_bad = list()
+    for result,j in zip(results,range(nspec)) :
+        if (result==(None,None)):
+            print ("Zero flux spectrum")
+            index_bad.append(j)
+        else:
+            i,=np.where(targetids==result["TARGETID"])
+            print (i)
+            for key in result.keys() :
+                formatted_results[key][i]=result[key]
+    
+    new_formatted_results =np.delete(formatted_results,index_bad)
+    formatted_results = new_formatted_results.copy()
+
     objtype='ELG'
-    io.write_zbest(args.outfile,brickname,objtype,formatted_results,truth_table_hdu)
+    io.write_zbest(args.outfile,targetid,objtype,formatted_results,truth_table_hdu)
     log.info("wrote %s"%args.outfile)
     log.info("the end")
     
